@@ -693,6 +693,15 @@ export function useConnection({
                 proxyFullAddressSSE,
               );
             }
+
+            const socketProxyPath = config.MCP_SOCKET_PROXY_PATH
+              .value as string;
+            if (socketProxyPath) {
+              mcpProxyServerUrl.searchParams.append(
+                "socketProxyPath",
+                socketProxyPath,
+              );
+            }
             transportOptions = {
               authProvider: serverAuthProvider,
               eventSourceInit: {

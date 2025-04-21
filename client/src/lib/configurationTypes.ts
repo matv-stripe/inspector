@@ -45,4 +45,9 @@ export type InspectorConfig = {
    * Default Time-to-Live (TTL) in milliseconds for newly created tasks.
    */
   MCP_TASK_TTL: ConfigItem;
+
+  /**
+   * Path to the unix socket of the proxy to route requests through.
+   */
+  MCP_SOCKET_PROXY_PATH: ConfigItem;
 };

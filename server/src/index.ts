@@ -33,12 +33,17 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync } from "fs";
 
+import { disableSocketProxy, enableSocketProxy } from "./socketProxy.js";
+
 const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 
 const sandboxRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 /sandbox requests per windowMs
 });
+
+// We need this to work with local https for oauth
+// process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
 const defaultEnvironment = {
   ...getDefaultEnvironment(),
@@ -434,6 +439,16 @@ const createTransport = async (
 
   const transportType = query.transportType as string;
 
+  let url = query.url as string;
+  console.log("Socket proxy path:", query.socketProxyPath);
+  if (query.socketProxyPath) {
+    enableSocketProxy(query.socketProxyPath as string);
+    // This is because most socket proxys support http under the hood
+    url = url.replace("https://", "http://");
+  } else {
+    disableSocketProxy();
+  }
+
   if (transportType === "stdio") {
     const command = (query.command as string).trim();
     const origArgs = shellParseArgs(query.args as string) as string[];
@@ -454,8 +469,6 @@ const createTransport = async (
     await transport.start();
     return { transport };
   } else if (transportType === "sse") {
-    const url = query.url as string;
-
     const headers = getHttpHeaders(req);
     headers["Accept"] = "text/event-stream";
     const headerHolder: ProxyHeaderHolder = { headers };
@@ -479,13 +492,10 @@ const createTransport = async (
     headers["Accept"] = "text/event-stream, application/json";
     const headerHolder: ProxyHeaderHolder = { headers };
 
-    const transport = new StreamableHTTPClientTransport(
-      new URL(query.url as string),
-      {
-        // Pass a custom fetch to inject the latest headers on each request
-        fetch: createCustomFetch(headerHolder),
-      },
-    );
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      // Pass a custom fetch to inject the latest headers on each request
+      fetch: createCustomFetch(headerHolder),
+    });
     await transport.start();
     return { transport, headerHolder };
   } else {

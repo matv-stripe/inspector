@@ -92,4 +92,10 @@ export const DEFAULT_INSPECTOR_CONFIG: InspectorConfig = {
     value: 60000,
     is_session_item: false,
   },
+  MCP_SOCKET_PROXY_PATH: {
+    label: "Socket Proxy Path",
+    description:
+      "Set this if you want to run MCP server through a unix socket proxy. Useful when testing behind a corporate proxy. Example: ~/home/.proxy",
+    value: "",
+  },
 } as const;
