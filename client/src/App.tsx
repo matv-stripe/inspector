@@ -101,6 +101,7 @@ import {
 } from "./lib/types/customHeaders";
 import MetadataTab from "./components/MetadataTab";
 import ChatTab from "./components/ChatTab";
+import { cn } from "@/lib/utils";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -371,6 +372,8 @@ const App = () => {
   useEffect(() => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
+
+  const [currentTab, setCurrentTab] = useState<string>("resources");
 
   const {
     connectionStatus,
@@ -1723,6 +1726,7 @@ const App = () => {
                       chatURL={getMCPProxyAddress(config) + "/chat"}
                       tools={tools}
                       callTool={callTool}
+                      listTools={listTools}
                     />
                   </>
                 )}
@@ -1757,7 +1761,10 @@ const App = () => {
           )}
         </div>
         <div
-          className="relative border-t border-border"
+          className={cn(
+            "relative border-t border-border",
+            currentTab === "chat" && "hidden",
+          )}
           style={{
             height: `${historyPaneHeight}px`,
           }}

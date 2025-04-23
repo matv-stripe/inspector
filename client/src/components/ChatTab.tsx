@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,12 +30,19 @@ type ChatTabProps = {
     name: string,
     params: Record<string, unknown>,
   ) => Promise<CompatibilityCallToolResult>;
+  listTools: () => void;
 };
 
-const ChatTab = ({ chatURL, tools, callTool }: ChatTabProps) => {
+const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (tools.length === 0) {
+      listTools();
+    }
+  }, [tools, listTools]);
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -108,7 +115,7 @@ const ChatTab = ({ chatURL, tools, callTool }: ChatTabProps) => {
   };
 
   return (
-    <TabsContent value="chat" className="h-full">
+    <TabsContent value="chat" className="h-96">
       <div className="flex flex-col h-full">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message, index) => (
@@ -169,11 +176,18 @@ const ChatTab = ({ chatURL, tools, callTool }: ChatTabProps) => {
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button variant="outline" size="icon" className="h-10">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-10 relative"
+                      >
                         <Hammer className="w-4 h-4" />
+                        <span className="absolute -top-1 -right-1 bg-primary text-primary-foreground text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                          {tools.length}
+                        </span>
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent className="max-w-[300px]">
+                    <TooltipContent className="max-w-[900px]">
                       <div className="space-y-2">
                         <p className="font-medium">Available Tools:</p>
                         <ul className="list-disc list-inside space-y-1">
