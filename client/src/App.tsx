@@ -52,6 +52,7 @@ import ToolsTab from "./components/ToolsTab";
 import { DEFAULT_INSPECTOR_CONFIG } from "./lib/constants";
 import { InspectorConfig } from "./lib/configurationTypes";
 import { getMCPProxyAddress } from "./utils/configUtils";
+import ChatTab from "./components/ChatTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -421,7 +422,10 @@ const App = () => {
     setNextToolCursor(response.nextCursor);
   };
 
-  const callTool = async (name: string, params: Record<string, unknown>) => {
+  const callTool = async (
+    name: string,
+    params: Record<string, unknown>,
+  ): Promise<CompatibilityCallToolResult> => {
     try {
       const response = await sendMCPRequest(
         {
@@ -438,6 +442,7 @@ const App = () => {
         "tools",
       );
       setToolResult(response);
+      return response;
     } catch (e) {
       const toolResult: CompatibilityCallToolResult = {
         content: [
@@ -449,6 +454,7 @@ const App = () => {
         isError: true,
       };
       setToolResult(toolResult);
+      return toolResult;
     }
   };
 
@@ -568,6 +574,10 @@ const App = () => {
                 <TabsTrigger value="roots">
                   <FolderTree className="w-4 h-4 mr-2" />
                   Roots
+                </TabsTrigger>
+                <TabsTrigger value="chat">
+                  <MessageSquare className="w-4 h-4 mr-2" />
+                  Chat
                 </TabsTrigger>
               </TabsList>
 
@@ -699,6 +709,11 @@ const App = () => {
                       roots={roots}
                       setRoots={setRoots}
                       onRootsChange={handleRootsChange}
+                    />
+                    <ChatTab
+                      chatURL={getMCPProxyAddress(config) + "/chat"}
+                      tools={tools}
+                      callTool={callTool}
                     />
                   </>
                 )}
