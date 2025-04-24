@@ -52,6 +52,8 @@ import ToolsTab from "./components/ToolsTab";
 import { DEFAULT_INSPECTOR_CONFIG } from "./lib/constants";
 import { InspectorConfig } from "./lib/configurationTypes";
 import { getMCPProxyAddress } from "./utils/configUtils";
+import ChatTab from "./components/ChatTab";
+import { cn } from "@/lib/utils";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -161,6 +163,8 @@ const App = () => {
   const progressTokenRef = useRef(0);
 
   const { height: historyPaneHeight, handleDragStart } = useDraggablePane(300);
+
+  const [currentTab, setCurrentTab] = useState<string>("resources");
 
   const {
     connectionStatus,
@@ -421,7 +425,10 @@ const App = () => {
     setNextToolCursor(response.nextCursor);
   };
 
-  const callTool = async (name: string, params: Record<string, unknown>) => {
+  const callTool = async (
+    name: string,
+    params: Record<string, unknown>,
+  ): Promise<CompatibilityCallToolResult> => {
     try {
       const response = await sendMCPRequest(
         {
@@ -438,6 +445,7 @@ const App = () => {
         "tools",
       );
       setToolResult(response);
+      return response;
     } catch (e) {
       const toolResult: CompatibilityCallToolResult = {
         content: [
@@ -449,6 +457,7 @@ const App = () => {
         isError: true,
       };
       setToolResult(toolResult);
+      return toolResult;
     }
   };
 
@@ -528,7 +537,10 @@ const App = () => {
                         : "ping"
               }
               className="w-full p-4"
-              onValueChange={(value) => (window.location.hash = value)}
+              onValueChange={(value) => {
+                window.location.hash = value;
+                setCurrentTab(value);
+              }}
             >
               <TabsList className="mb-4 p-0">
                 <TabsTrigger
@@ -568,6 +580,10 @@ const App = () => {
                 <TabsTrigger value="roots">
                   <FolderTree className="w-4 h-4 mr-2" />
                   Roots
+                </TabsTrigger>
+                <TabsTrigger value="chat">
+                  <MessageSquare className="w-4 h-4 mr-2" />
+                  Chat
                 </TabsTrigger>
               </TabsList>
 
@@ -700,6 +716,12 @@ const App = () => {
                       setRoots={setRoots}
                       onRootsChange={handleRootsChange}
                     />
+                    <ChatTab
+                      chatURL={getMCPProxyAddress(config) + "/chat"}
+                      tools={tools}
+                      callTool={callTool}
+                      listTools={listTools}
+                    />
                   </>
                 )}
               </div>
@@ -713,7 +735,10 @@ const App = () => {
           )}
         </div>
         <div
-          className="relative border-t border-border"
+          className={cn(
+            "relative border-t border-border",
+            currentTab === "chat" && "hidden",
+          )}
           style={{
             height: `${historyPaneHeight}px`,
           }}

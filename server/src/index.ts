@@ -3,6 +3,10 @@
 import cors from "cors";
 import { parseArgs } from "node:util";
 import { parse as shellParseArgs } from "shell-quote";
+import * as dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
 
 import {
   SSEClientTransport,
@@ -18,8 +22,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import express from "express";
 import { findActualExecutable } from "spawn-rx";
 import mcpProxy from "./mcpProxy.js";
+import OpenAI from "openai";
 
 import { disableSocketProxy, enableSocketProxy } from "./socketProxy.js";
+import { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ChatCompletionTool } from "openai/resources.mjs";
 
 const SSE_HEADERS_PASSTHROUGH = ["authorization"];
 const STREAMABLE_HTTP_HEADERS_PASSTHROUGH = ["authorization"];
@@ -42,6 +49,9 @@ const { values } = parseArgs({
 
 const app = express();
 app.use(cors());
+
+// set
+// NODE_TLS_REJECT_UNAUTHORIZED=0
 
 let webAppTransports: SSEServerTransport[] = [];
 
@@ -206,6 +216,61 @@ app.post("/message", async (req, res) => {
   } catch (error) {
     console.error("Error in /message route:", error);
     res.status(500).json(error);
+  }
+});
+
+const openai = new OpenAI({
+  baseURL: `${process.env.HTTP_PROXY}/v1/`,
+  apiKey: process.env.OPEN_AI_KEY,
+  defaultHeaders: {
+    Host: process.env.OPEN_AI_HOST,
+  },
+});
+
+app.post("/chat", express.json(), async (req, res) => {
+  try {
+    const { message } = req.body;
+    const tools: Tool[] = req.body.tools;
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    const openAITools: ChatCompletionTool[] = tools.flatMap((tool) => {
+      if (!tool.name || !tool.description || !tool.inputSchema) {
+        return [];
+      }
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      };
+    });
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: message }],
+      tools: openAITools,
+    });
+
+    const responseMessage = completion.choices[0].message;
+
+    const toolsCalled = responseMessage.tool_calls?.map((tc) => {
+      return {
+        name: tc.function.name,
+        args: JSON.parse(tc.function.arguments),
+      };
+    });
+
+    res.json({
+      response: responseMessage.content,
+      toolCalls: toolsCalled,
+    });
+  } catch (error) {
+    console.error("Error in /chat route:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
