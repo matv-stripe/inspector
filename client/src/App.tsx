@@ -17,6 +17,9 @@ import {
   Tool,
   LoggingLevel,
 } from "@modelcontextprotocol/sdk/types.js";
+import { OAuthTokensSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { SESSION_KEYS, getServerSpecificKey } from "./lib/constants";
+import { AuthDebuggerState } from "./lib/auth-types";
 import React, {
   Suspense,
   useCallback,
@@ -28,18 +31,21 @@ import { useConnection } from "./lib/hooks/useConnection";
 import { useDraggablePane } from "./lib/hooks/useDraggablePane";
 import { StdErrNotification } from "./lib/notificationTypes";
 
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import {
   Bell,
   Files,
   FolderTree,
   Hammer,
   Hash,
+  Key,
   MessageSquare,
 } from "lucide-react";
 
 import { z } from "zod";
 import "./App.css";
+import AuthDebugger from "./components/AuthDebugger";
 import ConsoleTab from "./components/ConsoleTab";
 import HistoryAndNotifications from "./components/History";
 import PingTab from "./components/PingTab";
@@ -49,11 +55,17 @@ import RootsTab from "./components/RootsTab";
 import SamplingTab, { PendingRequest } from "./components/SamplingTab";
 import Sidebar from "./components/Sidebar";
 import ToolsTab from "./components/ToolsTab";
-import { DEFAULT_INSPECTOR_CONFIG } from "./lib/constants";
 import { InspectorConfig } from "./lib/configurationTypes";
-import { getMCPProxyAddress } from "./utils/configUtils";
 import ChatTab from "./components/ChatTab";
 import { cn } from "@/lib/utils";
+import {
+  getMCPProxyAddress,
+  getInitialSseUrl,
+  getInitialTransportType,
+  getInitialCommand,
+  getInitialArgs,
+  initializeInspectorConfig,
+} from "./utils/configUtils";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -73,26 +85,13 @@ const App = () => {
     prompts: null,
     tools: null,
   });
-  const [command, setCommand] = useState<string>(() => {
-    return localStorage.getItem("lastCommand") || "mcp-server-everything";
-  });
-  const [args, setArgs] = useState<string>(() => {
-    return localStorage.getItem("lastArgs") || "";
-  });
+  const [command, setCommand] = useState<string>(getInitialCommand);
+  const [args, setArgs] = useState<string>(getInitialArgs);
 
-  const [sseUrl, setSseUrl] = useState<string>(() => {
-    return localStorage.getItem("lastSseUrl") || "http://localhost:3001/sse";
-  });
+  const [sseUrl, setSseUrl] = useState<string>(getInitialSseUrl);
   const [transportType, setTransportType] = useState<
     "stdio" | "sse" | "streamable-http"
-  >(() => {
-    return (
-      (localStorage.getItem("lastTransportType") as
-        | "stdio"
-        | "sse"
-        | "streamable-http") || "stdio"
-    );
-  });
+  >(getInitialTransportType);
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [stdErrNotifications, setStdErrNotifications] = useState<
@@ -101,27 +100,9 @@ const App = () => {
   const [roots, setRoots] = useState<Root[]>([]);
   const [env, setEnv] = useState<Record<string, string>>({});
 
-  const [config, setConfig] = useState<InspectorConfig>(() => {
-    const savedConfig = localStorage.getItem(CONFIG_LOCAL_STORAGE_KEY);
-    if (savedConfig) {
-      // merge default config with saved config
-      const mergedConfig = {
-        ...DEFAULT_INSPECTOR_CONFIG,
-        ...JSON.parse(savedConfig),
-      } as InspectorConfig;
-
-      // update description of keys to match the new description (in case of any updates to the default config description)
-      Object.entries(mergedConfig).forEach(([key, value]) => {
-        mergedConfig[key as keyof InspectorConfig] = {
-          ...value,
-          label: DEFAULT_INSPECTOR_CONFIG[key as keyof InspectorConfig].label,
-        };
-      });
-
-      return mergedConfig;
-    }
-    return DEFAULT_INSPECTOR_CONFIG;
-  });
+  const [config, setConfig] = useState<InspectorConfig>(() =>
+    initializeInspectorConfig(CONFIG_LOCAL_STORAGE_KEY),
+  );
   const [bearerToken, setBearerToken] = useState<string>(() => {
     return localStorage.getItem("lastBearerToken") || "";
   });
@@ -138,6 +119,27 @@ const App = () => {
       }
     >
   >([]);
+  const [isAuthDebuggerVisible, setIsAuthDebuggerVisible] = useState(false);
+
+  // Auth debugger state
+  const [authState, setAuthState] = useState<AuthDebuggerState>({
+    isInitiatingAuth: false,
+    oauthTokens: null,
+    loading: true,
+    oauthStep: "metadata_discovery",
+    oauthMetadata: null,
+    oauthClientInfo: null,
+    authorizationUrl: null,
+    authorizationCode: "",
+    latestError: null,
+    statusMessage: null,
+    validationError: null,
+  });
+
+  // Helper function to update specific auth state properties
+  const updateAuthState = (updates: Partial<AuthDebuggerState>) => {
+    setAuthState((prev) => ({ ...prev, ...updates }));
+  };
   const nextRequestId = useRef(0);
   const rootsRef = useRef<Root[]>([]);
 
@@ -237,10 +239,63 @@ const App = () => {
     (serverUrl: string) => {
       setSseUrl(serverUrl);
       setTransportType("sse");
+      setIsAuthDebuggerVisible(false);
       void connectMcpServer();
     },
     [connectMcpServer],
   );
+
+  // Update OAuth debug state during debug callback
+  const onOAuthDebugConnect = useCallback(
+    ({
+      authorizationCode,
+      errorMsg,
+    }: {
+      authorizationCode?: string;
+      errorMsg?: string;
+    }) => {
+      setIsAuthDebuggerVisible(true);
+      if (authorizationCode) {
+        updateAuthState({
+          authorizationCode,
+          oauthStep: "token_request",
+        });
+      }
+      if (errorMsg) {
+        updateAuthState({
+          latestError: new Error(errorMsg),
+        });
+      }
+    },
+    [],
+  );
+
+  // Load OAuth tokens when sseUrl changes
+  useEffect(() => {
+    const loadOAuthTokens = async () => {
+      try {
+        if (sseUrl) {
+          const key = getServerSpecificKey(SESSION_KEYS.TOKENS, sseUrl);
+          const tokens = sessionStorage.getItem(key);
+          if (tokens) {
+            const parsedTokens = await OAuthTokensSchema.parseAsync(
+              JSON.parse(tokens),
+            );
+            updateAuthState({
+              oauthTokens: parsedTokens,
+              oauthStep: "complete",
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error loading OAuth tokens:", error);
+      } finally {
+        updateAuthState({ loading: false });
+      }
+    };
+
+    loadOAuthTokens();
+  }, [sseUrl]);
 
   useEffect(() => {
     fetch(`${getMCPProxyAddress(config)}/config`)
@@ -480,6 +535,19 @@ const App = () => {
     setStdErrNotifications([]);
   };
 
+  // Helper component for rendering the AuthDebugger
+  const AuthDebuggerWrapper = () => (
+    <TabsContent value="auth">
+      <AuthDebugger
+        serverUrl={sseUrl}
+        onBack={() => setIsAuthDebuggerVisible(false)}
+        authState={authState}
+        updateAuthState={updateAuthState}
+      />
+    </TabsContent>
+  );
+
+  // Helper function to render OAuth callback components
   if (window.location.pathname === "/oauth/callback") {
     const OAuthCallback = React.lazy(
       () => import("./components/OAuthCallback"),
@@ -487,6 +555,17 @@ const App = () => {
     return (
       <Suspense fallback={<div>Loading...</div>}>
         <OAuthCallback onConnect={onOAuthConnect} />
+      </Suspense>
+    );
+  }
+
+  if (window.location.pathname === "/oauth/callback/debug") {
+    const OAuthDebugCallback = React.lazy(
+      () => import("./components/OAuthDebugCallback"),
+    );
+    return (
+      <Suspense fallback={<div>Loading...</div>}>
+        <OAuthDebugCallback onConnect={onOAuthDebugConnect} />
       </Suspense>
     );
   }
@@ -581,6 +660,10 @@ const App = () => {
                   <FolderTree className="w-4 h-4 mr-2" />
                   Roots
                 </TabsTrigger>
+                <TabsTrigger value="auth">
+                  <Key className="w-4 h-4 mr-2" />
+                  Auth
+                </TabsTrigger>
                 <TabsTrigger value="chat">
                   <MessageSquare className="w-4 h-4 mr-2" />
                   Chat
@@ -591,11 +674,24 @@ const App = () => {
                 {!serverCapabilities?.resources &&
                 !serverCapabilities?.prompts &&
                 !serverCapabilities?.tools ? (
-                  <div className="flex items-center justify-center p-4">
-                    <p className="text-lg text-gray-500">
-                      The connected server does not support any MCP capabilities
-                    </p>
-                  </div>
+                  <>
+                    <div className="flex items-center justify-center p-4">
+                      <p className="text-lg text-gray-500">
+                        The connected server does not support any MCP
+                        capabilities
+                      </p>
+                    </div>
+                    <PingTab
+                      onPingClick={() => {
+                        void sendMCPRequest(
+                          {
+                            method: "ping" as const,
+                          },
+                          EmptyResultSchema,
+                        );
+                      }}
+                    />
+                  </>
                 ) : (
                   <>
                     <ResourcesTab
@@ -663,6 +759,7 @@ const App = () => {
                       setSelectedPrompt={(prompt) => {
                         clearError("prompts");
                         setSelectedPrompt(prompt);
+                        setPromptContent("");
                       }}
                       handleCompletion={handleCompletion}
                       completionsSupported={completionsSupported}
@@ -716,6 +813,7 @@ const App = () => {
                       setRoots={setRoots}
                       onRootsChange={handleRootsChange}
                     />
+                    <AuthDebuggerWrapper />
                     <ChatTab
                       chatURL={getMCPProxyAddress(config) + "/chat"}
                       tools={tools}
@@ -726,11 +824,31 @@ const App = () => {
                 )}
               </div>
             </Tabs>
+          ) : isAuthDebuggerVisible ? (
+            <Tabs
+              defaultValue={"auth"}
+              className="w-full p-4"
+              onValueChange={(value) => (window.location.hash = value)}
+            >
+              <AuthDebuggerWrapper />
+            </Tabs>
           ) : (
-            <div className="flex items-center justify-center h-full">
+            <div className="flex flex-col items-center justify-center h-full gap-4">
               <p className="text-lg text-gray-500">
                 Connect to an MCP server to start inspecting
               </p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm text-muted-foreground">
+                  Need to configure authentication?
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAuthDebuggerVisible(true)}
+                >
+                  Open Auth Settings
+                </Button>
+              </div>
             </div>
           )}
         </div>
