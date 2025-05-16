@@ -13,15 +13,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-
-interface Message {
-  role: "user" | "assistant" | "tool";
-  content: string;
-  toolCall?: {
-    name: string;
-    args: object;
-  };
-}
+import { executeAgenticLoop } from "@/utils/executeAgenticLoop";
+import {
+  ChatCompletionMessageParam,
+  ChatCompletionMessageToolCall,
+} from "openai/resources/chat/completions";
+import JsonView from "./JsonView";
 
 type ChatTabProps = {
   chatURL: string;
@@ -33,8 +30,58 @@ type ChatTabProps = {
   listTools: () => void;
 };
 
+const MessageBubble = ({
+  message,
+}: {
+  message: ChatCompletionMessageParam;
+}) => {
+  let content = "";
+
+  if (message.role === "tool") {
+    content = JSON.parse(message.content as string)[0].text;
+  } else if (typeof message.content === "string") {
+    content = message.content;
+  } else if (message.content && typeof message.content === "object") {
+    content = JSON.stringify(message.content, null, 2);
+  }
+
+  let toolCalls: ChatCompletionMessageToolCall[] = [];
+
+  if ("tool_calls" in message && message.tool_calls) {
+    toolCalls = message.tool_calls;
+  }
+
+  return (
+    <div
+      className={`max-w-[80%] rounded-lg p-3 ${
+        message.role === "user"
+          ? "bg-primary text-primary-foreground"
+          : message.role === "tool"
+            ? "bg-secondary text-secondary-foreground"
+            : "bg-muted"
+      }`}
+    >
+      {message.role === "tool" ? (
+        <JsonView className="text-xs" data={content} />
+      ) : (
+        content
+      )}
+      {toolCalls.map((toolCall, index) => (
+        <div key={toolCall.id + "" + index} className="mt-2">
+          <div className="text-sm text-muted-foreground">
+            Tool Call: {toolCall.function.name}
+          </div>
+          <pre className="text-xs bg-secondary p-2 rounded">
+            {JSON.stringify(toolCall.function.arguments, null, 2)}
+          </pre>
+        </div>
+      )) ?? null}
+    </div>
+  );
+};
+
 const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatCompletionMessageParam[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -47,76 +94,28 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
   const handleSend = async () => {
     if (!input.trim()) return;
 
-    const userMessage = input.trim();
+    const initialMessages: ChatCompletionMessageParam[] = [
+      ...messages,
+      { role: "user", content: input.trim() } as ChatCompletionMessageParam,
+    ];
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    setMessages(initialMessages);
     setIsLoading(true);
 
-    try {
-      const response = await fetch(chatURL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ message: userMessage, tools: tools || [] }),
-      });
+    await executeAgenticLoop({
+      chatAPIEndpoint: chatURL,
+      initialMessages,
+      tools: tools,
+      onUpdateMessages: setMessages,
+      callTool,
+    });
 
-      if (!response.ok) {
-        throw new Error("Failed to send message");
-      }
-
-      type LLMChatResponse = {
-        response: string;
-        toolCalls: Array<{ name: string; args: object }>;
-      };
-      const data: LLMChatResponse = await response.json();
-
-      if (data.toolCalls && data.toolCalls.length > 0) {
-        const toolCallResultPromises = data.toolCalls.map(async (tc) => {
-          const toolCallResult = await callTool(
-            tc.name,
-            tc.args as Record<string, unknown>,
-          );
-          const toolResult = toolCallResult.content as any;
-          if (toolResult[0].type !== "text") {
-            throw new Error(
-              "Unknown tool call result type: " + JSON.stringify(toolResult),
-            );
-          }
-          return {
-            role: "tool" as const,
-            content: toolResult[0].text,
-            toolCall: tc,
-          };
-        });
-        const toolCallResults = await Promise.all(toolCallResultPromises);
-
-        setMessages((prev) => [...prev, ...toolCallResults]);
-      }
-
-      if (data.response) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: data.response },
-        ]);
-      }
-    } catch (error) {
-      console.error("Error sending message:", error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Sorry, there was an error processing your message.",
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+    setIsLoading(false);
   };
 
   return (
     <TabsContent value="chat" className="h-96">
-      <div className="flex flex-col h-full">
+      <div className="flex flex-col h-[900px]">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message, index) => (
             <div
@@ -125,29 +124,7 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
                 message.role === "user" ? "justify-end" : "justify-start"
               }`}
             >
-              <div
-                className={`max-w-[80%] rounded-lg p-3 ${
-                  message.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : message.role === "tool"
-                      ? "bg-secondary text-secondary-foreground"
-                      : "bg-muted"
-                }`}
-              >
-                {message.content}
-                {message.toolCall && (
-                  <div className="mt-2 text-sm">
-                    <div className="font-medium">Tool:</div>
-                    <pre className="mt-1 p-2 bg-background/50 rounded text-xs overflow-x-auto">
-                      {message.toolCall.name}
-                    </pre>
-                    <div className="font-medium">Arguments:</div>
-                    <pre className="mt-1 p-2 bg-background/50 rounded text-xs overflow-x-auto">
-                      {JSON.stringify(message.toolCall.args, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
+              <MessageBubble message={message} />
             </div>
           ))}
           {isLoading && (
