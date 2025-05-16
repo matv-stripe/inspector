@@ -368,44 +368,35 @@ const openai = new OpenAI({
 
 app.post("/chat", express.json(), async (req, res) => {
   try {
-    const { message } = req.body;
+    const { messages } = req.body;
     const tools: Tool[] = req.body.tools;
-    if (!message) {
-      return res.status(400).json({ error: "Message is required" });
+    if (!messages) {
+      return res.status(400).json({ error: "Messages are required" });
     }
 
     const openAITools: ChatCompletionTool[] = tools.flatMap((tool) => {
-      if (!tool.name || !tool.description || !tool.inputSchema) {
-        return [];
-      }
+      const name = tool.name;
+      const description = tool.description;
+      const parameters = tool.inputSchema || tool.parameters;
+
       return {
         type: "function",
         function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.inputSchema,
+          name,
+          description,
+          parameters,
         },
       };
     });
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
-      messages: [{ role: "user", content: message }],
+      messages: messages,
       tools: openAITools,
     });
 
-    const responseMessage = completion.choices[0].message;
-
-    const toolsCalled = responseMessage.tool_calls?.map((tc) => {
-      return {
-        name: tc.function.name,
-        args: JSON.parse(tc.function.arguments),
-      };
-    });
-
     res.json({
-      response: responseMessage.content,
-      toolCalls: toolsCalled,
+      message: completion.choices[0].message,
     });
   } catch (error) {
     console.error("Error in /chat route:", error);
