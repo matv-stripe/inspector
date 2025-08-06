@@ -2,6 +2,7 @@ export type ConfigItem = {
   label: string;
   description: string;
   value: string | number | boolean;
+  is_session_item: boolean;
 };
 
 /**
@@ -38,4 +39,9 @@ export type InspectorConfig = {
    * Path to the unix socket of the proxy to route requests through.
    */
   MCP_SOCKET_PROXY_PATH: ConfigItem;
+
+  /**
+   * Session token for authenticating with the MCP Proxy Server. This token is displayed in the proxy server console on startup.
+   */
+  MCP_PROXY_AUTH_TOKEN: ConfigItem;
 };

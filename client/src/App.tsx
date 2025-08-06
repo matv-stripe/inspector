@@ -19,7 +19,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { OAuthTokensSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { SESSION_KEYS, getServerSpecificKey } from "./lib/constants";
-import { AuthDebuggerState } from "./lib/auth-types";
+import { AuthDebuggerState, EMPTY_DEBUGGER_STATE } from "./lib/auth-types";
+import { OAuthStateMachine } from "./lib/oauth-state-machine";
+import { cacheToolOutputSchemas } from "./utils/schemaUtils";
 import React, {
   Suspense,
   useCallback,
@@ -28,7 +30,10 @@ import React, {
   useState,
 } from "react";
 import { useConnection } from "./lib/hooks/useConnection";
-import { useDraggablePane } from "./lib/hooks/useDraggablePane";
+import {
+  useDraggablePane,
+  useDraggableSidebar,
+} from "./lib/hooks/useDraggablePane";
 import { StdErrNotification } from "./lib/notificationTypes";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -47,7 +52,7 @@ import { z } from "zod";
 import "./App.css";
 import AuthDebugger from "./components/AuthDebugger";
 import ConsoleTab from "./components/ConsoleTab";
-import HistoryAndNotifications from "./components/History";
+import HistoryAndNotifications from "./components/HistoryAndNotifications";
 import PingTab from "./components/PingTab";
 import PromptsTab, { Prompt } from "./components/PromptsTab";
 import ResourcesTab from "./components/ResourcesTab";
@@ -60,12 +65,18 @@ import ChatTab from "./components/ChatTab";
 import { cn } from "@/lib/utils";
 import {
   getMCPProxyAddress,
+  getMCPProxyAuthToken,
   getInitialSseUrl,
   getInitialTransportType,
   getInitialCommand,
   getInitialArgs,
   initializeInspectorConfig,
+  saveInspectorConfig,
 } from "./utils/configUtils";
+import ElicitationTab, {
+  PendingElicitationRequest,
+  ElicitationResponse,
+} from "./components/ElicitationTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -75,6 +86,9 @@ const App = () => {
     ResourceTemplate[]
   >([]);
   const [resourceContent, setResourceContent] = useState<string>("");
+  const [resourceContentMap, setResourceContentMap] = useState<
+    Record<string, string>
+  >({});
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptContent, setPromptContent] = useState<string>("");
   const [tools, setTools] = useState<Tool[]>([]);
@@ -111,6 +125,14 @@ const App = () => {
     return localStorage.getItem("lastHeaderName") || "";
   });
 
+  const [oauthClientId, setOauthClientId] = useState<string>(() => {
+    return localStorage.getItem("lastOauthClientId") || "";
+  });
+
+  const [oauthScope, setOauthScope] = useState<string>(() => {
+    return localStorage.getItem("lastOauthScope") || "";
+  });
+
   const [pendingSampleRequests, setPendingSampleRequests] = useState<
     Array<
       PendingRequest & {
@@ -119,24 +141,19 @@ const App = () => {
       }
     >
   >([]);
+  const [pendingElicitationRequests, setPendingElicitationRequests] = useState<
+    Array<
+      PendingElicitationRequest & {
+        resolve: (response: ElicitationResponse) => void;
+        decline: (error: Error) => void;
+      }
+    >
+  >([]);
   const [isAuthDebuggerVisible, setIsAuthDebuggerVisible] = useState(false);
 
-  // Auth debugger state
-  const [authState, setAuthState] = useState<AuthDebuggerState>({
-    isInitiatingAuth: false,
-    oauthTokens: null,
-    loading: true,
-    oauthStep: "metadata_discovery",
-    oauthMetadata: null,
-    oauthClientInfo: null,
-    authorizationUrl: null,
-    authorizationCode: "",
-    latestError: null,
-    statusMessage: null,
-    validationError: null,
-  });
+  const [authState, setAuthState] =
+    useState<AuthDebuggerState>(EMPTY_DEBUGGER_STATE);
 
-  // Helper function to update specific auth state properties
   const updateAuthState = (updates: Partial<AuthDebuggerState>) => {
     setAuthState((prev) => ({ ...prev, ...updates }));
   };
@@ -164,8 +181,28 @@ const App = () => {
   const [nextToolCursor, setNextToolCursor] = useState<string | undefined>();
   const progressTokenRef = useRef(0);
 
-  const { height: historyPaneHeight, handleDragStart } = useDraggablePane(300);
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const hash = window.location.hash.slice(1);
+    const initialTab = hash || "resources";
+    return initialTab;
+  });
 
+  const currentTabRef = useRef<string>(activeTab);
+  const lastToolCallOriginTabRef = useRef<string>(activeTab);
+
+  useEffect(() => {
+    currentTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const { height: historyPaneHeight, handleDragStart } = useDraggablePane(300);
+  const {
+    width: sidebarWidth,
+    isDragging: isSidebarDragging,
+    handleDragStart: handleSidebarDragStart,
+  } = useDraggableSidebar(320);
+
+  // @ts-expect-error - this is used to set the initial tab
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [currentTab, setCurrentTab] = useState<string>("resources");
 
   const {
@@ -187,6 +224,8 @@ const App = () => {
     env,
     bearerToken,
     headerName,
+    oauthClientId,
+    oauthScope,
     config,
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
@@ -203,8 +242,64 @@ const App = () => {
         { id: nextRequestId.current++, request, resolve, reject },
       ]);
     },
+    onElicitationRequest: (request, resolve) => {
+      const currentTab = lastToolCallOriginTabRef.current;
+
+      setPendingElicitationRequests((prev) => [
+        ...prev,
+        {
+          id: nextRequestId.current++,
+          request: {
+            id: nextRequestId.current,
+            message: request.params.message,
+            requestedSchema: request.params.requestedSchema,
+          },
+          originatingTab: currentTab,
+          resolve,
+          decline: (error: Error) => {
+            console.error("Elicitation request rejected:", error);
+          },
+        },
+      ]);
+
+      setActiveTab("elicitations");
+      window.location.hash = "elicitations";
+    },
     getRoots: () => rootsRef.current,
+    defaultLoggingLevel: logLevel,
   });
+
+  useEffect(() => {
+    if (serverCapabilities) {
+      const hash = window.location.hash.slice(1);
+
+      const validTabs = [
+        ...(serverCapabilities?.resources ? ["resources"] : []),
+        ...(serverCapabilities?.prompts ? ["prompts"] : []),
+        ...(serverCapabilities?.tools ? ["tools"] : []),
+        "ping",
+        "sampling",
+        "elicitations",
+        "roots",
+        "auth",
+      ];
+
+      const isValidTab = validTabs.includes(hash);
+
+      if (!isValidTab) {
+        const defaultTab = serverCapabilities?.resources
+          ? "resources"
+          : serverCapabilities?.prompts
+            ? "prompts"
+            : serverCapabilities?.tools
+              ? "tools"
+              : "ping";
+
+        setActiveTab(defaultTab);
+        window.location.hash = defaultTab;
+      }
+    }
+  }, [serverCapabilities]);
 
   useEffect(() => {
     localStorage.setItem("lastCommand", command);
@@ -231,46 +326,99 @@ const App = () => {
   }, [headerName]);
 
   useEffect(() => {
-    localStorage.setItem(CONFIG_LOCAL_STORAGE_KEY, JSON.stringify(config));
+    localStorage.setItem("lastOauthClientId", oauthClientId);
+  }, [oauthClientId]);
+
+  useEffect(() => {
+    localStorage.setItem("lastOauthScope", oauthScope);
+  }, [oauthScope]);
+
+  useEffect(() => {
+    saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
   }, [config]);
 
-  // Auto-connect to previously saved serverURL after OAuth callback
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
       setSseUrl(serverUrl);
-      setTransportType("sse");
       setIsAuthDebuggerVisible(false);
       void connectMcpServer();
     },
     [connectMcpServer],
   );
 
-  // Update OAuth debug state during debug callback
   const onOAuthDebugConnect = useCallback(
-    ({
+    async ({
       authorizationCode,
       errorMsg,
+      restoredState,
     }: {
       authorizationCode?: string;
       errorMsg?: string;
+      restoredState?: AuthDebuggerState;
     }) => {
       setIsAuthDebuggerVisible(true);
-      if (authorizationCode) {
+
+      if (errorMsg) {
+        updateAuthState({
+          latestError: new Error(errorMsg),
+        });
+        return;
+      }
+
+      if (restoredState && authorizationCode) {
+        let currentState: AuthDebuggerState = {
+          ...restoredState,
+          authorizationCode,
+          oauthStep: "token_request",
+          isInitiatingAuth: true,
+          statusMessage: null,
+          latestError: null,
+        };
+
+        try {
+          const stateMachine = new OAuthStateMachine(sseUrl, (updates) => {
+            currentState = { ...currentState, ...updates };
+          });
+
+          while (
+            currentState.oauthStep !== "complete" &&
+            currentState.oauthStep !== "authorization_code"
+          ) {
+            await stateMachine.executeStep(currentState);
+          }
+
+          if (currentState.oauthStep === "complete") {
+            updateAuthState({
+              ...currentState,
+              statusMessage: {
+                type: "success",
+                message: "Authentication completed successfully",
+              },
+              isInitiatingAuth: false,
+            });
+          }
+        } catch (error) {
+          console.error("OAuth continuation error:", error);
+          updateAuthState({
+            latestError:
+              error instanceof Error ? error : new Error(String(error)),
+            statusMessage: {
+              type: "error",
+              message: `Failed to complete OAuth flow: ${error instanceof Error ? error.message : String(error)}`,
+            },
+            isInitiatingAuth: false,
+          });
+        }
+      } else if (authorizationCode) {
         updateAuthState({
           authorizationCode,
           oauthStep: "token_request",
         });
       }
-      if (errorMsg) {
-        updateAuthState({
-          latestError: new Error(errorMsg),
-        });
-      }
     },
-    [],
+    [sseUrl],
   );
 
-  // Load OAuth tokens when sseUrl changes
   useEffect(() => {
     const loadOAuthTokens = async () => {
       try {
@@ -289,8 +437,6 @@ const App = () => {
         }
       } catch (error) {
         console.error("Error loading OAuth tokens:", error);
-      } finally {
-        updateAuthState({ loading: false });
       }
     };
 
@@ -298,7 +444,14 @@ const App = () => {
   }, [sseUrl]);
 
   useEffect(() => {
-    fetch(`${getMCPProxyAddress(config)}/config`)
+    const headers: HeadersInit = {};
+    const { token: proxyAuthToken, header: proxyAuthTokenHeader } =
+      getMCPProxyAuthToken(config);
+    if (proxyAuthToken) {
+      headers[proxyAuthTokenHeader] = `Bearer ${proxyAuthToken}`;
+    }
+
+    fetch(`${getMCPProxyAddress(config)}/config`, { headers })
       .then((response) => response.json())
       .then((data) => {
         setEnv(data.defaultEnvironment);
@@ -312,18 +465,43 @@ const App = () => {
       .catch((error) =>
         console.error("Error fetching default environment:", error),
       );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [config]);
 
   useEffect(() => {
     rootsRef.current = roots;
   }, [roots]);
 
   useEffect(() => {
-    if (!window.location.hash) {
-      window.location.hash = "resources";
+    if (mcpClient && !window.location.hash) {
+      const defaultTab = serverCapabilities?.resources
+        ? "resources"
+        : serverCapabilities?.prompts
+          ? "prompts"
+          : serverCapabilities?.tools
+            ? "tools"
+            : "ping";
+      window.location.hash = defaultTab;
+    } else if (!mcpClient && window.location.hash) {
+      // Clear hash when disconnected - completely remove the fragment
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search,
+      );
     }
-  }, []);
+  }, [mcpClient, serverCapabilities]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.slice(1);
+      if (hash && hash !== activeTab) {
+        setActiveTab(hash);
+      }
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, [activeTab]);
 
   const handleApproveSampling = (id: number, result: CreateMessageResult) => {
     setPendingSampleRequests((prev) => {
@@ -337,6 +515,44 @@ const App = () => {
     setPendingSampleRequests((prev) => {
       const request = prev.find((r) => r.id === id);
       request?.reject(new Error("Sampling request rejected"));
+      return prev.filter((r) => r.id !== id);
+    });
+  };
+
+  const handleResolveElicitation = (
+    id: number,
+    response: ElicitationResponse,
+  ) => {
+    setPendingElicitationRequests((prev) => {
+      const request = prev.find((r) => r.id === id);
+      if (request) {
+        request.resolve(response);
+
+        if (request.originatingTab) {
+          const originatingTab = request.originatingTab;
+
+          const validTabs = [
+            ...(serverCapabilities?.resources ? ["resources"] : []),
+            ...(serverCapabilities?.prompts ? ["prompts"] : []),
+            ...(serverCapabilities?.tools ? ["tools"] : []),
+            "ping",
+            "sampling",
+            "elicitations",
+            "roots",
+            "auth",
+          ];
+
+          if (validTabs.includes(originatingTab)) {
+            setActiveTab(originatingTab);
+            window.location.hash = originatingTab;
+
+            setTimeout(() => {
+              setActiveTab(originatingTab);
+              window.location.hash = originatingTab;
+            }, 100);
+          }
+        }
+      }
       return prev.filter((r) => r.id !== id);
     });
   };
@@ -398,7 +614,23 @@ const App = () => {
     setNextResourceTemplateCursor(response.nextCursor);
   };
 
+  const getPrompt = async (name: string, args: Record<string, string> = {}) => {
+    lastToolCallOriginTabRef.current = currentTabRef.current;
+
+    const response = await sendMCPRequest(
+      {
+        method: "prompts/get" as const,
+        params: { name, arguments: args },
+      },
+      GetPromptResultSchema,
+      "prompts",
+    );
+    setPromptContent(JSON.stringify(response, null, 2));
+  };
+
   const readResource = async (uri: string) => {
+    lastToolCallOriginTabRef.current = currentTabRef.current;
+
     const response = await sendMCPRequest(
       {
         method: "resources/read" as const,
@@ -407,7 +639,12 @@ const App = () => {
       ReadResourceResultSchema,
       "resources",
     );
-    setResourceContent(JSON.stringify(response, null, 2));
+    const content = JSON.stringify(response, null, 2);
+    setResourceContent(content);
+    setResourceContentMap((prev) => ({
+      ...prev,
+      [uri]: content,
+    }));
   };
 
   const subscribeToResource = async (uri: string) => {
@@ -455,18 +692,6 @@ const App = () => {
     setNextPromptCursor(response.nextCursor);
   };
 
-  const getPrompt = async (name: string, args: Record<string, string> = {}) => {
-    const response = await sendMCPRequest(
-      {
-        method: "prompts/get" as const,
-        params: { name, arguments: args },
-      },
-      GetPromptResultSchema,
-      "prompts",
-    );
-    setPromptContent(JSON.stringify(response, null, 2));
-  };
-
   const listTools = async () => {
     const response = await sendMCPRequest(
       {
@@ -478,12 +703,12 @@ const App = () => {
     );
     setTools(response.tools);
     setNextToolCursor(response.nextCursor);
+    cacheToolOutputSchemas(response.tools);
   };
 
-  const callTool = async (
-    name: string,
-    params: Record<string, unknown>,
-  ): Promise<CompatibilityCallToolResult> => {
+  const callTool = async (name: string, params: Record<string, unknown>) => {
+    lastToolCallOriginTabRef.current = currentTabRef.current;
+
     try {
       const response = await sendMCPRequest(
         {
@@ -499,6 +724,7 @@ const App = () => {
         CompatibilityCallToolResultSchema,
         "tools",
       );
+
       setToolResult(response);
       return response;
     } catch (e) {
@@ -535,7 +761,6 @@ const App = () => {
     setStdErrNotifications([]);
   };
 
-  // Helper component for rendering the AuthDebugger
   const AuthDebuggerWrapper = () => (
     <TabsContent value="auth">
       <AuthDebugger
@@ -547,7 +772,6 @@ const App = () => {
     </TabsContent>
   );
 
-  // Helper function to render OAuth callback components
   if (window.location.pathname === "/oauth/callback") {
     const OAuthCallback = React.lazy(
       () => import("./components/OAuthCallback"),
@@ -572,56 +796,73 @@ const App = () => {
 
   return (
     <div className="flex h-screen bg-background">
-      <Sidebar
-        connectionStatus={connectionStatus}
-        transportType={transportType}
-        setTransportType={setTransportType}
-        command={command}
-        setCommand={setCommand}
-        args={args}
-        setArgs={setArgs}
-        sseUrl={sseUrl}
-        setSseUrl={setSseUrl}
-        env={env}
-        setEnv={setEnv}
-        config={config}
-        setConfig={setConfig}
-        bearerToken={bearerToken}
-        setBearerToken={setBearerToken}
-        headerName={headerName}
-        setHeaderName={setHeaderName}
-        onConnect={connectMcpServer}
-        onDisconnect={disconnectMcpServer}
-        stdErrNotifications={stdErrNotifications}
-        logLevel={logLevel}
-        sendLogLevelRequest={sendLogLevelRequest}
-        loggingSupported={!!serverCapabilities?.logging || false}
-        clearStdErrNotifications={clearStdErrNotifications}
-      />
+      <div
+        style={{
+          width: sidebarWidth,
+          minWidth: 200,
+          maxWidth: 600,
+          transition: isSidebarDragging ? "none" : "width 0.15s",
+        }}
+        className="bg-card border-r border-border flex flex-col h-full relative"
+      >
+        <Sidebar
+          connectionStatus={connectionStatus}
+          transportType={transportType}
+          setTransportType={setTransportType}
+          command={command}
+          setCommand={setCommand}
+          args={args}
+          setArgs={setArgs}
+          sseUrl={sseUrl}
+          setSseUrl={setSseUrl}
+          env={env}
+          setEnv={setEnv}
+          config={config}
+          setConfig={setConfig}
+          bearerToken={bearerToken}
+          setBearerToken={setBearerToken}
+          headerName={headerName}
+          setHeaderName={setHeaderName}
+          oauthClientId={oauthClientId}
+          setOauthClientId={setOauthClientId}
+          oauthScope={oauthScope}
+          setOauthScope={setOauthScope}
+          onConnect={connectMcpServer}
+          onDisconnect={disconnectMcpServer}
+          stdErrNotifications={stdErrNotifications}
+          logLevel={logLevel}
+          sendLogLevelRequest={sendLogLevelRequest}
+          loggingSupported={!!serverCapabilities?.logging || false}
+          clearStdErrNotifications={clearStdErrNotifications}
+        />
+        <div
+          onMouseDown={handleSidebarDragStart}
+          style={{
+            cursor: "col-resize",
+            position: "absolute",
+            top: 0,
+            right: 0,
+            width: 6,
+            height: "100%",
+            zIndex: 10,
+            background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
+          }}
+          aria-label="Resize sidebar"
+          data-testid="sidebar-drag-handle"
+        />
+      </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-auto">
           {mcpClient ? (
             <Tabs
-              defaultValue={
-                Object.keys(serverCapabilities ?? {}).includes(
-                  window.location.hash.slice(1),
-                )
-                  ? window.location.hash.slice(1)
-                  : serverCapabilities?.resources
-                    ? "resources"
-                    : serverCapabilities?.prompts
-                      ? "prompts"
-                      : serverCapabilities?.tools
-                        ? "tools"
-                        : "ping"
-              }
+              value={activeTab}
               className="w-full p-4"
               onValueChange={(value) => {
+                setActiveTab(value);
                 window.location.hash = value;
-                setCurrentTab(value);
               }}
             >
-              <TabsList className="mb-4 p-0">
+              <TabsList className="mb-4 py-0">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
@@ -656,6 +897,15 @@ const App = () => {
                     </span>
                   )}
                 </TabsTrigger>
+                <TabsTrigger value="elicitations" className="relative">
+                  <MessageSquare className="w-4 h-4 mr-2" />
+                  Elicitations
+                  {pendingElicitationRequests.length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                      {pendingElicitationRequests.length}
+                    </span>
+                  )}
+                </TabsTrigger>
                 <TabsTrigger value="roots">
                   <FolderTree className="w-4 h-4 mr-2" />
                   Roots
@@ -676,7 +926,7 @@ const App = () => {
                 !serverCapabilities?.tools ? (
                   <>
                     <div className="flex items-center justify-center p-4">
-                      <p className="text-lg text-gray-500">
+                      <p className="text-lg text-gray-500 dark:text-gray-400">
                         The connected server does not support any MCP
                         capabilities
                       </p>
@@ -776,6 +1026,7 @@ const App = () => {
                       clearTools={() => {
                         setTools([]);
                         setNextToolCursor(undefined);
+                        cacheToolOutputSchemas([]);
                       }}
                       callTool={async (name, params) => {
                         clearError("tools");
@@ -791,6 +1042,11 @@ const App = () => {
                       toolResult={toolResult}
                       nextCursor={nextToolCursor}
                       error={errors.tools}
+                      resourceContent={resourceContentMap}
+                      onReadResource={(uri: string) => {
+                        clearError("resources");
+                        readResource(uri);
+                      }}
                     />
                     <ConsoleTab />
                     <PingTab
@@ -807,6 +1063,10 @@ const App = () => {
                       pendingRequests={pendingSampleRequests}
                       onApprove={handleApproveSampling}
                       onReject={handleRejectSampling}
+                    />
+                    <ElicitationTab
+                      pendingRequests={pendingElicitationRequests}
+                      onResolve={handleResolveElicitation}
                     />
                     <RootsTab
                       roots={roots}
@@ -834,7 +1094,7 @@ const App = () => {
             </Tabs>
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-4">
-              <p className="text-lg text-gray-500">
+              <p className="text-lg text-gray-500 dark:text-gray-400">
                 Connect to an MCP server to start inspecting
               </p>
               <div className="flex items-center gap-2">
@@ -862,7 +1122,7 @@ const App = () => {
           }}
         >
           <div
-            className="absolute w-full h-4 -top-2 cursor-row-resize flex items-center justify-center hover:bg-accent/50"
+            className="absolute w-full h-4 -top-2 cursor-row-resize flex items-center justify-center hover:bg-accent/50 dark:hover:bg-input/40"
             onMouseDown={handleDragStart}
           >
             <div className="w-8 h-1 rounded-full bg-border" />

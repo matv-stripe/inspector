@@ -7,17 +7,21 @@ import { TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import DynamicJsonForm from "./DynamicJsonForm";
 import type { JsonValue, JsonSchemaType } from "@/utils/jsonUtils";
-import { generateDefaultValue } from "@/utils/schemaUtils";
+import { generateDefaultValue, isPropertyRequired } from "@/utils/schemaUtils";
 import {
-  CallToolResultSchema,
   CompatibilityCallToolResult,
   ListToolsResult,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import ListPane from "./ListPane";
 import JsonView from "./JsonView";
+import ToolResults from "./ToolResults";
+
+// Type guard to safely detect the optional _meta field without using `any`
+const hasMeta = (tool: Tool): tool is Tool & { _meta: unknown } =>
+  typeof (tool as { _meta?: unknown })._meta !== "undefined";
 
 const ToolsTab = ({
   tools,
@@ -28,6 +32,8 @@ const ToolsTab = ({
   setSelectedTool,
   toolResult,
   nextCursor,
+  resourceContent,
+  onReadResource,
 }: {
   tools: Tool[];
   listTools: () => void;
@@ -38,88 +44,27 @@ const ToolsTab = ({
   toolResult: CompatibilityCallToolResult | null;
   nextCursor: ListToolsResult["nextCursor"];
   error: string | null;
+  resourceContent: Record<string, string>;
+  onReadResource?: (uri: string) => void;
 }) => {
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [isToolRunning, setIsToolRunning] = useState(false);
+  const [isOutputSchemaExpanded, setIsOutputSchemaExpanded] = useState(false);
+  const [isMetaExpanded, setIsMetaExpanded] = useState(false);
 
   useEffect(() => {
     const params = Object.entries(
       selectedTool?.inputSchema.properties ?? [],
     ).map(([key, value]) => [
       key,
-      generateDefaultValue(value as JsonSchemaType),
+      generateDefaultValue(
+        value as JsonSchemaType,
+        key,
+        selectedTool?.inputSchema as JsonSchemaType,
+      ),
     ]);
     setParams(Object.fromEntries(params));
   }, [selectedTool]);
-
-  const renderToolResult = () => {
-    if (!toolResult) return null;
-
-    if ("content" in toolResult) {
-      const parsedResult = CallToolResultSchema.safeParse(toolResult);
-      if (!parsedResult.success) {
-        return (
-          <>
-            <h4 className="font-semibold mb-2">Invalid Tool Result:</h4>
-            <JsonView data={toolResult} />
-            <h4 className="font-semibold mb-2">Errors:</h4>
-            {parsedResult.error.errors.map((error, idx) => (
-              <JsonView data={error} key={idx} />
-            ))}
-          </>
-        );
-      }
-      const structuredResult = parsedResult.data;
-      const isError = structuredResult.isError ?? false;
-
-      return (
-        <>
-          <h4 className="font-semibold mb-2">
-            Tool Result:{" "}
-            {isError ? (
-              <span className="text-red-600 font-semibold">Error</span>
-            ) : (
-              <span className="text-green-600 font-semibold">Success</span>
-            )}
-          </h4>
-          {structuredResult.content.map((item, index) => (
-            <div key={index} className="mb-2">
-              {item.type === "text" && (
-                <JsonView data={item.text} isError={isError} />
-              )}
-              {item.type === "image" && (
-                <img
-                  src={`data:${item.mimeType};base64,${item.data}`}
-                  alt="Tool result image"
-                  className="max-w-full h-auto"
-                />
-              )}
-              {item.type === "resource" &&
-                (item.resource?.mimeType?.startsWith("audio/") ? (
-                  <audio
-                    controls
-                    src={`data:${item.resource.mimeType};base64,${item.resource.blob}`}
-                    className="w-full"
-                  >
-                    <p>Your browser does not support audio playback</p>
-                  </audio>
-                ) : (
-                  <JsonView data={item.resource} />
-                ))}
-            </div>
-          ))}
-        </>
-      );
-    } else if ("toolResult" in toolResult) {
-      return (
-        <>
-          <h4 className="font-semibold mb-2">Tool Result (Legacy):</h4>
-
-          <JsonView data={toolResult.toolResult} />
-        </>
-      );
-    }
-  };
 
   return (
     <TabsContent value="tools">
@@ -145,8 +90,8 @@ const ToolsTab = ({
           isButtonDisabled={!nextCursor && tools.length > 0}
         />
 
-        <div className="bg-card rounded-lg shadow">
-          <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+        <div className="bg-card border border-border rounded-lg shadow">
+          <div className="p-4 border-b border-gray-200 dark:border-border">
             <h3 className="font-semibold">
               {selectedTool ? selectedTool.name : "Select a tool"}
             </h3>
@@ -154,19 +99,25 @@ const ToolsTab = ({
           <div className="p-4">
             {selectedTool ? (
               <div className="space-y-4">
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   {selectedTool.description}
                 </p>
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {
                     const prop = value as JsonSchemaType;
+                    const inputSchema =
+                      selectedTool.inputSchema as JsonSchemaType;
+                    const required = isPropertyRequired(key, inputSchema);
                     return (
                       <div key={key}>
                         <Label
                           htmlFor={key}
-                          className="block text-sm font-medium text-gray-700"
+                          className="block text-sm font-medium text-gray-700 dark:text-gray-300"
                         >
                           {key}
+                          {required && (
+                            <span className="text-red-500 ml-1">*</span>
+                          )}
                         </Label>
                         {prop.type === "boolean" ? (
                           <div className="flex items-center space-x-2 mt-2">
@@ -231,12 +182,13 @@ const ToolsTab = ({
                             name={key}
                             placeholder={prop.description}
                             value={(params[key] as string) ?? ""}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = e.target.value;
                               setParams({
                                 ...params,
-                                [key]: Number(e.target.value),
-                              })
-                            }
+                                [key]: value === "" ? "" : Number(value),
+                              });
+                            }}
                             className="mt-1"
                           />
                         ) : (
@@ -262,6 +214,76 @@ const ToolsTab = ({
                     );
                   },
                 )}
+                {selectedTool.outputSchema && (
+                  <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-semibold">Output Schema:</h4>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setIsOutputSchemaExpanded(!isOutputSchemaExpanded)
+                        }
+                        className="h-6 px-2"
+                      >
+                        {isOutputSchemaExpanded ? (
+                          <>
+                            <ChevronUp className="h-3 w-3 mr-1" />
+                            Collapse
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="h-3 w-3 mr-1" />
+                            Expand
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <div
+                      className={`transition-all ${
+                        isOutputSchemaExpanded
+                          ? ""
+                          : "max-h-[8rem] overflow-y-auto"
+                      }`}
+                    >
+                      <JsonView data={selectedTool.outputSchema} />
+                    </div>
+                  </div>
+                )}
+                {selectedTool &&
+                  hasMeta(selectedTool) &&
+                  selectedTool._meta && (
+                    <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-semibold">Meta:</h4>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setIsMetaExpanded(!isMetaExpanded)}
+                          className="h-6 px-2"
+                        >
+                          {isMetaExpanded ? (
+                            <>
+                              <ChevronUp className="h-3 w-3 mr-1" />
+                              Collapse
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="h-3 w-3 mr-1" />
+                              Expand
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                      <div
+                        className={`transition-all ${
+                          isMetaExpanded ? "" : "max-h-[8rem] overflow-y-auto"
+                        }`}
+                      >
+                        <JsonView data={selectedTool._meta} />
+                      </div>
+                    </div>
+                  )}
                 <Button
                   onClick={async () => {
                     try {
@@ -285,7 +307,12 @@ const ToolsTab = ({
                     </>
                   )}
                 </Button>
-                {toolResult && renderToolResult()}
+                <ToolResults
+                  toolResult={toolResult}
+                  selectedTool={selectedTool}
+                  resourceContent={resourceContent}
+                  onReadResource={onReadResource}
+                />
               </div>
             ) : (
               <Alert>

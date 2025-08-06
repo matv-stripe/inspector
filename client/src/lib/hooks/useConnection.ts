@@ -28,24 +28,32 @@ import {
   ToolListChangedNotificationSchema,
   PromptListChangedNotificationSchema,
   Progress,
+  LoggingLevel,
+  ElicitRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { z } from "zod";
 import { ConnectionStatus } from "../constants";
 import { Notification, StdErrNotificationSchema } from "../notificationTypes";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
-import { InspectorOAuthClientProvider } from "../auth";
+import {
+  clearClientInformationFromSessionStorage,
+  InspectorOAuthClientProvider,
+  saveClientInformationToSessionStorage,
+} from "../auth";
 import packageJson from "../../../package.json";
 import {
   getMCPProxyAddress,
   getMCPServerRequestMaxTotalTimeout,
   resetRequestTimeoutOnProgress,
   getMCPSocketProxyPath,
+  getMCPProxyAuthToken,
 } from "@/utils/configUtils";
 import { getMCPServerRequestTimeout } from "@/utils/configUtils";
 import { InspectorConfig } from "../configurationTypes";
+import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -55,13 +63,18 @@ interface UseConnectionOptions {
   env: Record<string, string>;
   bearerToken?: string;
   headerName?: string;
+  oauthClientId?: string;
+  oauthScope?: string;
   config: InspectorConfig;
   onNotification?: (notification: Notification) => void;
   onStdErrNotification?: (notification: Notification) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onPendingRequest?: (request: any, resolve: any, reject: any) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onElicitationRequest?: (request: any, resolve: any) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getRoots?: () => any[];
+  defaultLoggingLevel?: LoggingLevel;
 }
 
 export function useConnection({
@@ -72,11 +85,15 @@ export function useConnection({
   env,
   bearerToken,
   headerName,
+  oauthClientId,
+  oauthScope,
   config,
   onNotification,
   onStdErrNotification,
   onPendingRequest,
+  onElicitationRequest,
   getRoots,
+  defaultLoggingLevel,
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -84,10 +101,29 @@ export function useConnection({
   const [serverCapabilities, setServerCapabilities] =
     useState<ServerCapabilities | null>(null);
   const [mcpClient, setMcpClient] = useState<Client | null>(null);
+  const [clientTransport, setClientTransport] = useState<Transport | null>(
+    null,
+  );
   const [requestHistory, setRequestHistory] = useState<
     { request: string; response?: string }[]
   >([]);
-  const [completionsSupported, setCompletionsSupported] = useState(true);
+  const [completionsSupported, setCompletionsSupported] = useState(false);
+
+  useEffect(() => {
+    if (!oauthClientId) {
+      clearClientInformationFromSessionStorage({
+        serverUrl: sseUrl,
+        isPreregistered: true,
+      });
+      return;
+    }
+
+    saveClientInformationToSessionStorage({
+      serverUrl: sseUrl,
+      clientInformation: { client_id: oauthClientId },
+      isPreregistered: true,
+    });
+  }, [oauthClientId, sseUrl]);
 
   const pushHistory = (request: object, response?: object) => {
     setRequestHistory((prev) => [
@@ -166,6 +202,7 @@ export function useConnection({
     ref: ResourceReference | PromptReference,
     argName: string,
     value: string,
+    context?: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<string[]> => {
     if (!mcpClient || !completionsSupported) {
@@ -182,6 +219,12 @@ export function useConnection({
         ref,
       },
     };
+
+    if (context) {
+      request["params"]["context"] = {
+        arguments: context,
+      };
+    }
 
     try {
       const response = await makeRequest(request, CompleteResultSchema, {
@@ -239,7 +282,13 @@ export function useConnection({
   const checkProxyHealth = async () => {
     try {
       const proxyHealthUrl = new URL(`${getMCPProxyAddress(config)}/health`);
-      const proxyHealthResponse = await fetch(proxyHealthUrl);
+      const { token: proxyAuthToken, header: proxyAuthTokenHeader } =
+        getMCPProxyAuthToken(config);
+      const headers: HeadersInit = {};
+      if (proxyAuthToken) {
+        headers[proxyAuthTokenHeader] = `Bearer ${proxyAuthToken}`;
+      }
+      const proxyHealthResponse = await fetch(proxyHealthUrl, { headers });
       const proxyHealth = await proxyHealthResponse.json();
       if (proxyHealth?.status !== "ok") {
         throw new Error("MCP Proxy Server is not healthy");
@@ -250,12 +299,29 @@ export function useConnection({
     }
   };
 
+  const is401Error = (error: unknown): boolean => {
+    return (
+      (error instanceof SseError && error.code === 401) ||
+      (error instanceof Error && error.message.includes("401")) ||
+      (error instanceof Error && error.message.includes("Unauthorized"))
+    );
+  };
+
+  const isProxyAuthError = (error: unknown): boolean => {
+    return (
+      error instanceof Error &&
+      error.message.includes("Authentication required. Use the session token")
+    );
+  };
+
   const handleAuthError = async (error: unknown) => {
-    if (error instanceof SseError && error.code === 401) {
-      // Create a new auth provider with the current server URL
+    if (is401Error(error)) {
       const serverAuthProvider = new InspectorOAuthClientProvider(sseUrl);
 
-      const result = await auth(serverAuthProvider, { serverUrl: sseUrl });
+      const result = await auth(serverAuthProvider, {
+        serverUrl: sseUrl,
+        scope: oauthScope,
+      });
       return result === "AUTHORIZED";
     }
 
@@ -271,6 +337,7 @@ export function useConnection({
       {
         capabilities: {
           sampling: {},
+          elicitation: {},
           roots: {
             listChanged: true,
           },
@@ -298,7 +365,22 @@ export function useConnection({
         bearerToken || (await serverAuthProvider.tokens())?.access_token;
       if (token) {
         const authHeaderName = headerName || "Authorization";
-        headers[authHeaderName] = `Bearer ${token}`;
+
+        // Add custom header name as a special request header to let the server know which header to pass through
+        if (authHeaderName.toLowerCase() !== "authorization") {
+          headers[authHeaderName] = token;
+          headers["x-custom-auth-header"] = authHeaderName;
+        } else {
+          headers[authHeaderName] = `Bearer ${token}`;
+        }
+      }
+
+      // Add proxy authentication
+      const { token: proxyAuthToken, header: proxyAuthTokenHeader } =
+        getMCPProxyAuthToken(config);
+      const proxyHeaders: HeadersInit = {};
+      if (proxyAuthToken) {
+        proxyHeaders[proxyAuthTokenHeader] = `Bearer ${proxyAuthToken}`;
       }
 
       // Create appropriate transport
@@ -318,11 +400,15 @@ export function useConnection({
             eventSourceInit: {
               fetch: (
                 url: string | URL | globalThis.Request,
-                init: RequestInit | undefined,
-              ) => fetch(url, { ...init, headers }),
+                init?: RequestInit,
+              ) =>
+                fetch(url, {
+                  ...init,
+                  headers: { ...headers, ...proxyHeaders },
+                }),
             },
             requestInit: {
-              headers,
+              headers: { ...headers, ...proxyHeaders },
             },
           };
           break;
@@ -331,15 +417,18 @@ export function useConnection({
           mcpProxyServerUrl = new URL(`${getMCPProxyAddress(config)}/sse`);
           mcpProxyServerUrl.searchParams.append("url", sseUrl);
           transportOptions = {
-            authProvider: serverAuthProvider,
             eventSourceInit: {
               fetch: (
                 url: string | URL | globalThis.Request,
-                init: RequestInit | undefined,
-              ) => fetch(url, { ...init, headers }),
+                init?: RequestInit,
+              ) =>
+                fetch(url, {
+                  ...init,
+                  headers: { ...headers, ...proxyHeaders },
+                }),
             },
             requestInit: {
-              headers,
+              headers: { ...headers, ...proxyHeaders },
             },
           };
           break;
@@ -348,15 +437,18 @@ export function useConnection({
           mcpProxyServerUrl = new URL(`${getMCPProxyAddress(config)}/mcp`);
           mcpProxyServerUrl.searchParams.append("url", sseUrl);
           transportOptions = {
-            authProvider: serverAuthProvider,
             eventSourceInit: {
               fetch: (
                 url: string | URL | globalThis.Request,
-                init: RequestInit | undefined,
-              ) => fetch(url, { ...init, headers }),
+                init?: RequestInit,
+              ) =>
+                fetch(url, {
+                  ...init,
+                  headers: { ...headers, ...proxyHeaders },
+                }),
             },
             requestInit: {
-              headers,
+              headers: { ...headers, ...proxyHeaders },
             },
             // TODO these should be configurable...
             reconnectionOptions: {
@@ -381,14 +473,6 @@ export function useConnection({
           socketProxyPath,
         );
       }
-
-      const clientTransport =
-        transportType === "streamable-http"
-          ? new StreamableHTTPClientTransport(mcpProxyServerUrl as URL, {
-              sessionId: undefined,
-              ...transportOptions,
-            })
-          : new SSEClientTransport(mcpProxyServerUrl as URL, transportOptions);
 
       if (onNotification) {
         [
@@ -419,7 +503,20 @@ export function useConnection({
 
       let capabilities;
       try {
-        await client.connect(clientTransport);
+        const transport =
+          transportType === "streamable-http"
+            ? new StreamableHTTPClientTransport(mcpProxyServerUrl as URL, {
+                sessionId: undefined,
+                ...transportOptions,
+              })
+            : new SSEClientTransport(
+                mcpProxyServerUrl as URL,
+                transportOptions,
+              );
+
+        await client.connect(transport as Transport);
+
+        setClientTransport(transport);
 
         capabilities = client.getServerCapabilities();
         const initializeRequest = {
@@ -435,19 +532,32 @@ export function useConnection({
           `Failed to connect to MCP Server via the MCP Inspector Proxy: ${mcpProxyServerUrl}:`,
           error,
         );
+
+        // Check if it's a proxy auth error
+        if (isProxyAuthError(error)) {
+          toast({
+            title: "Proxy Authentication Required",
+            description:
+              "Please enter the session token from the proxy server console in the Configuration settings.",
+            variant: "destructive",
+          });
+          setConnectionStatus("error");
+          return;
+        }
+
         const shouldRetry = await handleAuthError(error);
         if (shouldRetry) {
           return connect(undefined, retryCount + 1);
         }
-
-        if (error instanceof SseError && error.code === 401) {
+        if (is401Error(error)) {
           // Don't set error state if we're about to redirect for auth
+
           return;
         }
         throw error;
       }
       setServerCapabilities(capabilities ?? null);
-      setCompletionsSupported(true); // Reset completions support on new connection
+      setCompletionsSupported(capabilities?.completions !== undefined);
 
       if (onPendingRequest) {
         client.setRequestHandler(CreateMessageRequestSchema, (request) => {
@@ -463,6 +573,18 @@ export function useConnection({
         });
       }
 
+      if (capabilities?.logging && defaultLoggingLevel) {
+        await client.setLoggingLevel(defaultLoggingLevel);
+      }
+
+      if (onElicitationRequest) {
+        client.setRequestHandler(ElicitRequestSchema, async (request) => {
+          return new Promise((resolve) => {
+            onElicitationRequest(request, resolve);
+          });
+        });
+      }
+
       setMcpClient(client);
       setConnectionStatus("connected");
     } catch (e) {
@@ -472,10 +594,15 @@ export function useConnection({
   };
 
   const disconnect = async () => {
+    if (transportType === "streamable-http")
+      await (
+        clientTransport as StreamableHTTPClientTransport
+      ).terminateSession();
     await mcpClient?.close();
     const authProvider = new InspectorOAuthClientProvider(sseUrl);
     authProvider.clear();
     setMcpClient(null);
+    setClientTransport(null);
     setConnectionStatus("disconnected");
     setCompletionsSupported(false);
     setServerCapabilities(null);

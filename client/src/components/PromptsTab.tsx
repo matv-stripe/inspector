@@ -48,6 +48,7 @@ const PromptsTab = ({
     ref: PromptReference | ResourceReference,
     argName: string,
     value: string,
+    context?: Record<string, string>,
   ) => Promise<string[]>;
   completionsSupported: boolean;
   promptContent: string;
@@ -73,6 +74,7 @@ const PromptsTab = ({
         },
         argName,
         value,
+        promptArgs,
       );
     }
   };
@@ -98,20 +100,20 @@ const PromptsTab = ({
             setPromptArgs({});
           }}
           renderItem={(prompt) => (
-            <>
+            <div className="flex flex-col items-start">
               <span className="flex-1">{prompt.name}</span>
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-gray-500 text-left">
                 {prompt.description}
               </span>
-            </>
+            </div>
           )}
           title="Prompts"
           buttonText={nextCursor ? "List More Prompts" : "List Prompts"}
           isButtonDisabled={!nextCursor && prompts.length > 0}
         />
 
-        <div className="bg-card rounded-lg shadow">
-          <div className="p-4 border-b border-gray-200 dark:border-gray-800">
+        <div className="bg-card border border-border rounded-lg shadow">
+          <div className="p-4 border-b border-gray-200 dark:border-border">
             <h3 className="font-semibold">
               {selectedPrompt ? selectedPrompt.name : "Select a prompt"}
             </h3>
@@ -126,7 +128,7 @@ const PromptsTab = ({
             ) : selectedPrompt ? (
               <div className="space-y-4">
                 {selectedPrompt.description && (
-                  <p className="text-sm text-gray-600">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
                     {selectedPrompt.description}
                   </p>
                 )}

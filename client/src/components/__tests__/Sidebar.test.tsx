@@ -42,6 +42,10 @@ describe("Sidebar Environment Variables", () => {
     setArgs: jest.fn(),
     sseUrl: "",
     setSseUrl: jest.fn(),
+    oauthClientId: "",
+    setOauthClientId: jest.fn(),
+    oauthScope: "",
+    setOauthScope: jest.fn(),
     env: {},
     setEnv: jest.fn(),
     bearerToken: "",
@@ -519,6 +523,7 @@ describe("Sidebar Environment Variables", () => {
             label: "Request Timeout",
             description: "Timeout for requests to the MCP server (ms)",
             value: 5000,
+            is_session_item: false,
           },
         }),
       );
@@ -544,6 +549,7 @@ describe("Sidebar Environment Variables", () => {
             description:
               "Set this if you are running the MCP Inspector Proxy on a non-default address. Example: http://10.1.1.22:5577",
             value: "http://localhost:8080",
+            is_session_item: false,
           },
         }),
       );
@@ -569,6 +575,7 @@ describe("Sidebar Environment Variables", () => {
             description:
               "Maximum total timeout for requests sent to the MCP server (ms) (Use with progress notifications)",
             value: 10000,
+            is_session_item: false,
           },
         }),
       );
@@ -591,6 +598,7 @@ describe("Sidebar Environment Variables", () => {
             label: "Request Timeout",
             description: "Timeout for requests to the MCP server (ms)",
             value: 0,
+            is_session_item: false,
           },
         }),
       );
@@ -637,6 +645,7 @@ describe("Sidebar Environment Variables", () => {
             label: "Request Timeout",
             description: "Timeout for requests to the MCP server (ms)",
             value: 3000,
+            is_session_item: false,
           },
         }),
       );
@@ -755,7 +764,7 @@ describe("Sidebar Environment Variables", () => {
         {
           type: "sse",
           url: sseUrl,
-          note: "For SSE connections, add this URL directly in Client",
+          note: "For SSE connections, add this URL directly in your MCP Client",
         },
         null,
         4,
@@ -780,7 +789,7 @@ describe("Sidebar Environment Variables", () => {
             "default-server": {
               type: "sse",
               url: sseUrl,
-              note: "For SSE connections, add this URL directly in Client",
+              note: "For SSE connections, add this URL directly in your MCP Client",
             },
           },
         },
@@ -805,7 +814,7 @@ describe("Sidebar Environment Variables", () => {
         {
           type: "streamable-http",
           url: sseUrl,
-          note: "For Streamable HTTP connections, add this URL directly in Client",
+          note: "For Streamable HTTP connections, add this URL directly in your MCP Client",
         },
         null,
         4,
@@ -830,7 +839,7 @@ describe("Sidebar Environment Variables", () => {
             "default-server": {
               type: "streamable-http",
               url: sseUrl,
-              note: "For Streamable HTTP connections, add this URL directly in Client",
+              note: "For Streamable HTTP connections, add this URL directly in your MCP Client",
             },
           },
         },

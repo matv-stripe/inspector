@@ -56,6 +56,10 @@ interface SidebarProps {
   setBearerToken: (token: string) => void;
   headerName?: string;
   setHeaderName?: (name: string) => void;
+  oauthClientId: string;
+  setOauthClientId: (id: string) => void;
+  oauthScope: string;
+  setOauthScope: (scope: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
   stdErrNotifications: StdErrNotification[];
@@ -83,6 +87,10 @@ const Sidebar = ({
   setBearerToken,
   headerName,
   setHeaderName,
+  oauthClientId,
+  setOauthClientId,
+  oauthScope,
+  setOauthScope,
   onConnect,
   onDisconnect,
   stdErrNotifications,
@@ -95,7 +103,7 @@ const Sidebar = ({
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
-  const [showBearerToken, setShowBearerToken] = useState(false);
+  const [showAuthConfig, setShowAuthConfig] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [shownEnvVars, setShownEnvVars] = useState<Set<string>>(new Set());
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
@@ -127,14 +135,14 @@ const Sidebar = ({
       return {
         type: "sse",
         url: sseUrl,
-        note: "For SSE connections, add this URL directly in Client",
+        note: "For SSE connections, add this URL directly in your MCP Client",
       };
     }
     if (transportType === "streamable-http") {
       return {
         type: "streamable-http",
         url: sseUrl,
-        note: "For Streamable HTTP connections, add this URL directly in Client",
+        note: "For Streamable HTTP connections, add this URL directly in your MCP Client",
       };
     }
     return {};
@@ -172,7 +180,7 @@ const Sidebar = ({
             description:
               transportType === "stdio"
                 ? "Server configuration has been copied to clipboard. Add this to your mcp.json inside the 'mcpServers' object with your preferred server name."
-                : "SSE URL has been copied. Use this URL in Cursor directly.",
+                : "SSE URL has been copied. Use this URL directly in your MCP Client.",
           });
 
           setTimeout(() => {
@@ -214,8 +222,8 @@ const Sidebar = ({
   }, [generateMCPServerFile, toast, reportError]);
 
   return (
-    <div className="w-80 bg-card border-r border-border flex flex-col h-full">
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800">
+    <div className="bg-card border-r border-border flex flex-col h-full">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center">
           <h1 className="ml-2 text-lg font-semibold">
             MCP Inspector v{version}
@@ -285,57 +293,27 @@ const Sidebar = ({
                 <label className="text-sm font-medium" htmlFor="sse-url-input">
                   URL
                 </label>
-                <Input
-                  id="sse-url-input"
-                  placeholder="URL"
-                  value={sseUrl}
-                  onChange={(e) => setSseUrl(e.target.value)}
-                  className="font-mono"
-                />
-              </div>
-              <div className="space-y-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowBearerToken(!showBearerToken)}
-                  className="flex items-center w-full"
-                  data-testid="auth-button"
-                  aria-expanded={showBearerToken}
-                >
-                  {showBearerToken ? (
-                    <ChevronDown className="w-4 h-4 mr-2" />
-                  ) : (
-                    <ChevronRight className="w-4 h-4 mr-2" />
-                  )}
-                  Authentication
-                </Button>
-                {showBearerToken && (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Header Name</label>
-                    <Input
-                      placeholder="Authorization"
-                      onChange={(e) =>
-                        setHeaderName && setHeaderName(e.target.value)
-                      }
-                      data-testid="header-input"
-                      className="font-mono"
-                      value={headerName}
-                    />
-                    <label
-                      className="text-sm font-medium"
-                      htmlFor="bearer-token-input"
-                    >
-                      Bearer Token
-                    </label>
-                    <Input
-                      id="bearer-token-input"
-                      placeholder="Bearer Token"
-                      value={bearerToken}
-                      onChange={(e) => setBearerToken(e.target.value)}
-                      data-testid="bearer-token-input"
-                      className="font-mono"
-                      type="password"
-                    />
-                  </div>
+                {sseUrl ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Input
+                        id="sse-url-input"
+                        placeholder="URL"
+                        value={sseUrl}
+                        onChange={(e) => setSseUrl(e.target.value)}
+                        className="font-mono"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{sseUrl}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Input
+                    id="sse-url-input"
+                    placeholder="URL"
+                    value={sseUrl}
+                    onChange={(e) => setSseUrl(e.target.value)}
+                    className="font-mono"
+                  />
                 )}
               </div>
             </>
@@ -506,6 +484,94 @@ const Sidebar = ({
             </Tooltip>
           </div>
 
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowAuthConfig(!showAuthConfig)}
+              className="flex items-center w-full"
+              data-testid="auth-button"
+              aria-expanded={showAuthConfig}
+            >
+              {showAuthConfig ? (
+                <ChevronDown className="w-4 h-4 mr-2" />
+              ) : (
+                <ChevronRight className="w-4 h-4 mr-2" />
+              )}
+              Authentication
+            </Button>
+            {showAuthConfig && (
+              <>
+                {/* Bearer Token Section */}
+                <div className="space-y-2 p-3 rounded border">
+                  <h4 className="text-sm font-semibold flex items-center">
+                    API Token Authentication
+                  </h4>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Header Name</label>
+                    <Input
+                      placeholder="Authorization"
+                      onChange={(e) =>
+                        setHeaderName && setHeaderName(e.target.value)
+                      }
+                      data-testid="header-input"
+                      className="font-mono"
+                      value={headerName}
+                    />
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="bearer-token-input"
+                    >
+                      Bearer Token
+                    </label>
+                    <Input
+                      id="bearer-token-input"
+                      placeholder="Bearer Token"
+                      value={bearerToken}
+                      onChange={(e) => setBearerToken(e.target.value)}
+                      data-testid="bearer-token-input"
+                      className="font-mono"
+                      type="password"
+                    />
+                  </div>
+                </div>
+                {transportType !== "stdio" && (
+                  // OAuth Configuration
+                  <div className="space-y-2 p-3  rounded border">
+                    <h4 className="text-sm font-semibold flex items-center">
+                      OAuth 2.0 Flow
+                    </h4>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Client ID</label>
+                      <Input
+                        placeholder="Client ID"
+                        onChange={(e) => setOauthClientId(e.target.value)}
+                        value={oauthClientId}
+                        data-testid="oauth-client-id-input"
+                        className="font-mono"
+                      />
+                      <label className="text-sm font-medium">
+                        Redirect URL
+                      </label>
+                      <Input
+                        readOnly
+                        placeholder="Redirect URL"
+                        value={window.location.origin + "/oauth/callback"}
+                        className="font-mono"
+                      />
+                      <label className="text-sm font-medium">Scope</label>
+                      <Input
+                        placeholder="Scope (space-separated)"
+                        onChange={(e) => setOauthScope(e.target.value)}
+                        value={oauthScope}
+                        data-testid="oauth-scope-input"
+                        className="font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           {/* Configuration */}
           <div className="space-y-2">
             <Button
@@ -646,13 +712,18 @@ const Sidebar = ({
                   }
                 })()}`}
               />
-              <span className="text-sm text-gray-600">
+              <span className="text-sm text-gray-600 dark:text-gray-400">
                 {(() => {
                   switch (connectionStatus) {
                     case "connected":
                       return "Connected";
-                    case "error":
-                      return "Connection Error, is your MCP server running?";
+                    case "error": {
+                      const hasProxyToken = config.MCP_PROXY_AUTH_TOKEN?.value;
+                      if (!hasProxyToken) {
+                        return "Connection Error - Did you add the proxy session token in Configuration?";
+                      }
+                      return "Connection Error - Check if your MCP server is running and proxy token is correct";
+                    }
                     case "error-connecting-to-proxy":
                       return "Error Connecting to MCP Inspector Proxy - Check Console logs";
                     default:
