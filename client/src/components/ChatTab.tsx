@@ -114,8 +114,8 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
   };
 
   return (
-    <TabsContent value="chat" className="h-96">
-      <div className="flex flex-col h-[900px]">
+    <TabsContent value="chat" className="flex min-h-[24rem] flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message, index) => (
             <div
@@ -135,7 +135,7 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
             </div>
           )}
         </div>
-        <div className="border-t p-4 bg-background">
+        <div className="border-t bg-card p-4">
           <div className="flex gap-2">
             <Input
               value={input}

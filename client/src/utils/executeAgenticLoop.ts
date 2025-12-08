@@ -68,7 +68,28 @@ export async function executeAgenticLoop({
 
     const data = await chatResponse.json();
 
+    // Handle API errors
+    if (!chatResponse.ok || data.error) {
+      const errorMessage: ChatCompletionMessageParam = {
+        role: "assistant",
+        content: `Error: ${data.error || `HTTP ${chatResponse.status}`}`,
+      };
+      newMessages.push(errorMessage);
+      onUpdateMessages([...initialMessages, ...newMessages]);
+      return;
+    }
+
     const firstMessage: ChatCompletionMessage = data.message;
+    if (!firstMessage) {
+      const errorMessage: ChatCompletionMessageParam = {
+        role: "assistant",
+        content: "Error: No response received from the API",
+      };
+      newMessages.push(errorMessage);
+      onUpdateMessages([...initialMessages, ...newMessages]);
+      return;
+    }
+
     newMessages.push(firstMessage);
     onUpdateMessages([...initialMessages, ...newMessages]);
 
