@@ -31,6 +31,9 @@
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.6",
+    "node-fetch": "^3.3.2",
     "openai": "^4.95.1",
     "ws": "^8.18.0",
     "zod": "^3.25.76"

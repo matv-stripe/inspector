@@ -4,9 +4,34 @@ import cors from "cors";
 import { parseArgs } from "node:util";
 import { parse as shellParseArgs } from "shell-quote";
 import * as dotenv from "dotenv";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import nodeFetch from "node-fetch";
+import { HttpProxyAgent } from "http-proxy-agent";
 
-// Load environment variables from .env file
-dotenv.config();
+// Load environment variables from .env file in the server directory
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, "..", ".env") });
+
+// HTTP proxy agent for routing through certproxy (port 7891)
+const httpProxyAgent = new HttpProxyAgent("http://127.0.0.1:7891");
+
+// Custom fetch implementation using node-fetch to bypass Node.js undici's port 10080 blocking
+// This is required for Stripe's service mesh which uses envoy on port 10080
+// For local development, it uses certproxy to access litellm.corp.stripe.com
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fetchPolyfill = async (url: any, init?: any): Promise<any> => {
+  const urlStr = url.toString();
+  // Use HTTP proxy for Stripe corp domains via certproxy
+  if (urlStr.includes("litellm.corp.stripe.com")) {
+    console.log(`[fetchPolyfill] Using HTTP proxy for: ${urlStr}`);
+    return nodeFetch(urlStr, { ...init, agent: httpProxyAgent });
+  }
+  // For service mesh URLs (envoy) or other URLs, use node-fetch directly
+  console.log(`[fetchPolyfill] Direct fetch for: ${urlStr}`);
+  return nodeFetch(urlStr, init);
+};
 
 import {
   SSEClientTransport,
@@ -533,12 +558,19 @@ app.post(
   },
 );
 
+// For local development, use http://litellm.corp.stripe.com via certproxy (HTTP proxy on port 7891)
+// For service mesh, set LITELLM_BASE_URL=http://litellm-srv.service.envoy:10080/v1
+const litellmBaseUrl =
+  process.env.LITELLM_BASE_URL ??
+  process.env.OPENAI_BASE_URL ??
+  "http://litellm.corp.stripe.com/v1";
+const litellmApiKey =
+  process.env.LITELLM_API_KEY ?? process.env.OPENAI_API_KEY ?? "use_case=librechat";
+
 const openai = new OpenAI({
-  baseURL: `${process.env.HTTP_PROXY}/v1/`,
-  apiKey: process.env.OPEN_AI_KEY,
-  defaultHeaders: {
-    Host: process.env.OPEN_AI_HOST,
-  },
+  baseURL: litellmBaseUrl,
+  apiKey: litellmApiKey,
+  fetch: fetchPolyfill, // polyfill with node-fetch because Node's built-in undici fetch blocks port 10080
 });
 
 app.post("/chat", express.json(), async (req, res) => {

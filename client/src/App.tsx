@@ -941,6 +941,12 @@ const App = () => {
                         );
                       }}
                     />
+                    <ChatTab
+                      chatURL={getMCPProxyAddress(config) + "/chat"}
+                      tools={tools}
+                      callTool={callTool}
+                      listTools={listTools}
+                    />
                   </>
                 ) : (
                   <>
