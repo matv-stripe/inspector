@@ -2,6 +2,16 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { McpResponse } from "./types.js";
 
+// JSON value type matching the client utils
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 type JsonSchemaType = {
   type: "string" | "number" | "integer" | "boolean" | "array" | "object";
   description?: string;
@@ -9,9 +19,14 @@ type JsonSchemaType = {
   items?: JsonSchemaType;
 };
 
-export async function listTools(client: Client): Promise<McpResponse> {
+export async function listTools(
+  client: Client,
+  metadata?: Record<string, string>,
+): Promise<McpResponse> {
   try {
-    const response = await client.listTools();
+    const params =
+      metadata && Object.keys(metadata).length > 0 ? { _meta: metadata } : {};
+    const response = await client.listTools(params);
     return response;
   } catch (error) {
     throw new Error(
@@ -20,7 +35,10 @@ export async function listTools(client: Client): Promise<McpResponse> {
   }
 }
 
-function convertParameterValue(value: string, schema: JsonSchemaType): unknown {
+function convertParameterValue(
+  value: string,
+  schema: JsonSchemaType,
+): JsonValue {
   if (!value) {
     return value;
   }
@@ -35,7 +53,7 @@ function convertParameterValue(value: string, schema: JsonSchemaType): unknown {
 
   if (schema.type === "object" || schema.type === "array") {
     try {
-      return JSON.parse(value);
+      return JSON.parse(value) as JsonValue;
     } catch (error) {
       return value;
     }
@@ -47,8 +65,8 @@ function convertParameterValue(value: string, schema: JsonSchemaType): unknown {
 function convertParameters(
   tool: Tool,
   params: Record<string, string>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
+): Record<string, JsonValue> {
+  const result: Record<string, JsonValue> = {};
   const properties = tool.inputSchema.properties || {};
 
   for (const [key, value] of Object.entries(params)) {
@@ -68,23 +86,50 @@ function convertParameters(
 export async function callTool(
   client: Client,
   name: string,
-  args: Record<string, string>,
+  args: Record<string, JsonValue>,
+  generalMetadata?: Record<string, string>,
+  toolSpecificMetadata?: Record<string, string>,
 ): Promise<McpResponse> {
   try {
-    const toolsResponse = await listTools(client);
+    const toolsResponse = await listTools(client, generalMetadata);
     const tools = toolsResponse.tools as Tool[];
     const tool = tools.find((t) => t.name === name);
 
-    let convertedArgs: Record<string, unknown> = args;
+    let convertedArgs: Record<string, JsonValue> = args;
 
     if (tool) {
-      // Convert parameters based on the tool's schema
-      convertedArgs = convertParameters(tool, args);
+      // Convert parameters based on the tool's schema, but only for string values
+      // since we now accept pre-parsed values from the CLI
+      const stringArgs: Record<string, string> = {};
+      for (const [key, value] of Object.entries(args)) {
+        if (typeof value === "string") {
+          stringArgs[key] = value;
+        }
+      }
+
+      if (Object.keys(stringArgs).length > 0) {
+        const convertedStringArgs = convertParameters(tool, stringArgs);
+        convertedArgs = { ...args, ...convertedStringArgs };
+      }
+    }
+
+    // Merge general metadata with tool-specific metadata
+    // Tool-specific metadata takes precedence over general metadata
+    let mergedMetadata: Record<string, string> | undefined;
+    if (generalMetadata || toolSpecificMetadata) {
+      mergedMetadata = {
+        ...(generalMetadata || {}),
+        ...(toolSpecificMetadata || {}),
+      };
     }
 
     const response = await client.callTool({
       name: name,
       arguments: convertedArgs,
+      _meta:
+        mergedMetadata && Object.keys(mergedMetadata).length > 0
+          ? mergedMetadata
+          : undefined,
     });
     return response;
   } catch (error) {

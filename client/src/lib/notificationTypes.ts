@@ -3,20 +3,10 @@ import {
   ClientNotificationSchema,
   ServerNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-
-export const StdErrNotificationSchema = BaseNotificationSchema.extend({
-  method: z.literal("notifications/stderr"),
-  params: z.object({
-    content: z.string(),
-  }),
-});
+import type { SchemaOutput } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 
 export const NotificationSchema = ClientNotificationSchema.or(
-  StdErrNotificationSchema,
-)
-  .or(ServerNotificationSchema)
-  .or(BaseNotificationSchema);
+  ServerNotificationSchema,
+).or(BaseNotificationSchema);
 
-export type StdErrNotification = z.infer<typeof StdErrNotificationSchema>;
-export type Notification = z.infer<typeof NotificationSchema>;
+export type Notification = SchemaOutput<typeof NotificationSchema>;
