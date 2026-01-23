@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable no-await-in-loop */
 import {
   CompatibilityCallToolResult,
   ListToolsResult,
@@ -66,9 +64,27 @@ export async function executeAgenticLoop({
       }),
     });
 
+    if (!chatResponse.ok) {
+      const errorText = await chatResponse.text();
+      let errorMessage: string;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.error || errorText;
+      } catch {
+        errorMessage = errorText;
+      }
+      throw new Error(
+        `Chat API error (${chatResponse.status}): ${errorMessage}`,
+      );
+    }
+
     const data = await chatResponse.json();
 
     const firstMessage: ChatCompletionMessage = data.message;
+    if (!firstMessage) {
+      throw new Error("Invalid API response: missing message");
+    }
+
     newMessages.push(firstMessage);
     onUpdateMessages([...initialMessages, ...newMessages]);
 
@@ -80,9 +96,18 @@ export async function executeAgenticLoop({
         toolCalls.map(async (toolCall) => {
           const functionCall = toolCall.function;
 
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(functionCall.arguments);
+          } catch {
+            throw new Error(
+              `Failed to parse tool arguments for ${functionCall.name}: ${functionCall.arguments}`,
+            );
+          }
+
           const toolCallResponse = (await callTool(
             functionCall.name,
-            JSON.parse(functionCall.arguments),
+            args,
           )) as CompatibilityCallToolResult;
 
           newMessages.push({

@@ -873,11 +873,8 @@ app.post(
 );
 
 const openai = new OpenAI({
-  baseURL: `${process.env.HTTP_PROXY}/v1/`,
-  apiKey: process.env.OPEN_AI_KEY,
-  defaultHeaders: {
-    Host: process.env.OPEN_AI_HOST,
-  },
+  baseURL: process.env.LLM_BASE_URL || "http://litellm.corp.stripe.com/v1",
+  apiKey: process.env.LLM_API_KEY || "use_case=development&team=developer-ai",
 });
 
 app.post("/chat", express.json(), async (req, res) => {
@@ -904,7 +901,7 @@ app.post("/chat", express.json(), async (req, res) => {
     });
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: process.env.LLM_MODEL || "claude-sonnet-4",
       messages: messages,
       tools: openAITools,
     });

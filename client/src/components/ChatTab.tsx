@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Send, Hammer } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Loader2, Send, Hammer, AlertCircle } from "lucide-react";
 import {
   CompatibilityCallToolResult,
   Tool,
@@ -19,6 +20,7 @@ import {
   ChatCompletionMessageToolCall,
 } from "openai/resources/chat/completions";
 import JsonView from "./JsonView";
+import { useToast } from "@/lib/hooks/useToast";
 
 type ChatTabProps = {
   chatURL: string;
@@ -84,6 +86,8 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
   const [messages, setMessages] = useState<ChatCompletionMessageParam[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     if (tools.length === 0) {
@@ -101,22 +105,41 @@ const ChatTab = ({ chatURL, tools, listTools, callTool }: ChatTabProps) => {
     setInput("");
     setMessages(initialMessages);
     setIsLoading(true);
+    setError(null);
 
-    await executeAgenticLoop({
-      chatAPIEndpoint: chatURL,
-      initialMessages,
-      tools: tools,
-      onUpdateMessages: setMessages,
-      callTool,
-    });
-
-    setIsLoading(false);
+    try {
+      await executeAgenticLoop({
+        chatAPIEndpoint: chatURL,
+        initialMessages,
+        tools: tools,
+        onUpdateMessages: setMessages,
+        callTool,
+      });
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "An unknown error occurred";
+      setError(errorMessage);
+      toast({
+        title: "Chat Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <TabsContent value="chat" className="h-96">
       <div className="flex flex-col h-[900px]">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
           {messages.map((message, index) => (
             <div
               key={index}
