@@ -10,8 +10,13 @@ client/tsconfig.node.tsbuildinfo
 cli/build
 test-output
 .env
+tool-test-output
+metadata-test-output
 # symlinked by `npm run link:sdk`:
 sdk
 client/playwright-report/
 client/results.json
 client/test-results/
+client/e2e/test-results/
+mcp.json
+.claude/settings.local.json

@@ -3,9 +3,14 @@ import "@testing-library/jest-dom";
 import { describe, it, jest, beforeEach } from "@jest/globals";
 import ToolsTab from "../ToolsTab";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { Tabs } from "@/components/ui/tabs";
-import { cacheToolOutputSchemas } from "@/utils/schemaUtils";
+import { Tabs } from "../ui/tabs";
+import { cacheToolOutputSchemas } from "../../utils/schemaUtils";
 import { within } from "@testing-library/react";
+import {
+  META_NAME_RULES_MESSAGE,
+  META_PREFIX_RULES_MESSAGE,
+  RESERVED_NAMESPACE_MESSAGE,
+} from "../../utils/metaUtils";
 
 describe("ToolsTab", () => {
   beforeEach(() => {
@@ -41,6 +46,16 @@ describe("ToolsTab", () => {
         type: "object" as const,
         properties: {
           num: { type: "number" as const },
+        },
+      },
+    },
+    {
+      name: "tool4",
+      description: "Tool with nullable field",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          num: { type: ["number", "null"] as const },
         },
       },
     },
@@ -109,9 +124,14 @@ describe("ToolsTab", () => {
       fireEvent.click(submitButton);
     });
 
-    expect(defaultProps.callTool).toHaveBeenCalledWith(mockTools[1].name, {
-      count: 42,
-    });
+    expect(defaultProps.callTool).toHaveBeenCalledWith(
+      mockTools[1].name,
+      {
+        count: 42,
+      },
+      undefined,
+      false,
+    );
   });
 
   it("should allow typing negative numbers", async () => {
@@ -130,9 +150,159 @@ describe("ToolsTab", () => {
       fireEvent.click(submitButton);
     });
 
-    expect(defaultProps.callTool).toHaveBeenCalledWith(mockTools[0].name, {
-      num: -42,
+    expect(defaultProps.callTool).toHaveBeenCalledWith(
+      mockTools[0].name,
+      {
+        num: -42,
+      },
+      undefined,
+      false,
+    );
+  });
+
+  it("should allow specifying null value", async () => {
+    const mockCallTool = jest.fn();
+    const toolWithNullableField = mockTools[3];
+
+    renderToolsTab({
+      tools: [toolWithNullableField],
+      selectedTool: toolWithNullableField,
+      callTool: mockCallTool,
     });
+
+    const nullToggleButton = screen.getByRole("checkbox", { name: /null/i });
+    expect(nullToggleButton).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(nullToggleButton);
+    });
+
+    expect(screen.getByRole("toolinputwrapper").classList).toContain(
+      "pointer-events-none",
+    );
+
+    const runButton = screen.getByRole("button", { name: /run tool/i });
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+
+    // Tool should have been called with null value
+    expect(mockCallTool).toHaveBeenCalledWith(
+      toolWithNullableField.name,
+      {
+        num: null,
+      },
+      undefined,
+      false,
+    );
+  });
+
+  it("should support tri-state nullable boolean (null -> false -> true -> null)", async () => {
+    const mockCallTool = jest.fn();
+    const toolWithNullableBoolean: Tool = {
+      name: "testTool",
+      description: "Tool with nullable boolean",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          optionalBoolean: {
+            type: ["boolean", "null"] as const,
+            default: null,
+          },
+        },
+      },
+    };
+
+    renderToolsTab({
+      tools: [toolWithNullableBoolean],
+      selectedTool: toolWithNullableBoolean,
+      callTool: mockCallTool,
+    });
+
+    const nullCheckbox = screen.getByRole("checkbox", { name: /null/i });
+    const runButton = screen.getByRole("button", { name: /run tool/i });
+
+    // State 1: Initial state should be null (input disabled)
+    const wrapper = screen.getByRole("toolinputwrapper");
+    expect(wrapper.classList).toContain("pointer-events-none");
+    expect(wrapper.classList).toContain("opacity-50");
+
+    // Verify tool is called with null initially
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+    expect(mockCallTool).toHaveBeenCalledWith(
+      toolWithNullableBoolean.name,
+      {
+        optionalBoolean: null,
+      },
+      undefined,
+      false,
+    );
+
+    // State 2: Uncheck null checkbox -> should set value to false and enable input
+    await act(async () => {
+      fireEvent.click(nullCheckbox);
+    });
+    expect(wrapper.classList).not.toContain("pointer-events-none");
+
+    // Clear previous calls to make assertions clearer
+    mockCallTool.mockClear();
+
+    // Verify tool can be called with false
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+    expect(mockCallTool).toHaveBeenLastCalledWith(
+      toolWithNullableBoolean.name,
+      {
+        optionalBoolean: false,
+      },
+      undefined,
+      false,
+    );
+
+    // State 3: Check boolean checkbox -> should set value to true
+    // Find the boolean checkbox within the input wrapper (to avoid ID conflict with null checkbox)
+    const booleanCheckbox = within(wrapper).getByRole("checkbox");
+
+    mockCallTool.mockClear();
+
+    await act(async () => {
+      fireEvent.click(booleanCheckbox);
+    });
+
+    // Verify tool can be called with true
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+    expect(mockCallTool).toHaveBeenLastCalledWith(
+      toolWithNullableBoolean.name,
+      {
+        optionalBoolean: true,
+      },
+      undefined,
+      false,
+    );
+
+    // State 4: Check null checkbox again -> should set value back to null and disable input
+    await act(async () => {
+      fireEvent.click(nullCheckbox);
+    });
+    expect(wrapper.classList).toContain("pointer-events-none");
+
+    // Verify tool can be called with null again
+    await act(async () => {
+      fireEvent.click(runButton);
+    });
+    expect(mockCallTool).toHaveBeenLastCalledWith(
+      toolWithNullableBoolean.name,
+      {
+        optionalBoolean: null,
+      },
+      undefined,
+      false,
+    );
   });
 
   it("should disable button and change text while tool is running", async () => {
@@ -558,10 +728,10 @@ describe("ToolsTab", () => {
     });
   });
 
-  describe("Meta Display", () => {
-    const toolWithMeta = {
+  describe("Metadata Display", () => {
+    const toolWithMetadata = {
       name: "metaTool",
-      description: "Tool with meta",
+      description: "Tool with metadata",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -574,10 +744,10 @@ describe("ToolsTab", () => {
       },
     } as unknown as Tool;
 
-    it("should display meta section when tool has _meta", () => {
+    it("should display metadata section when tool has _meta", () => {
       renderToolsTab({
-        tools: [toolWithMeta],
-        selectedTool: toolWithMeta,
+        tools: [toolWithMetadata],
+        selectedTool: toolWithMetadata,
       });
 
       expect(screen.getByText("Meta:")).toBeInTheDocument();
@@ -586,10 +756,10 @@ describe("ToolsTab", () => {
       ).toBeInTheDocument();
     });
 
-    it("should toggle meta expansion", () => {
+    it("should toggle metadata schema expansion", () => {
       renderToolsTab({
-        tools: [toolWithMeta],
-        selectedTool: toolWithMeta,
+        tools: [toolWithMetadata],
+        selectedTool: toolWithMetadata,
       });
 
       // There might be multiple Expand buttons (Output Schema, Meta). We need the one within Meta section
@@ -619,22 +789,337 @@ describe("ToolsTab", () => {
     });
   });
 
-  describe("ToolResults Meta", () => {
-    it("should display meta information when present in toolResult", () => {
-      const resultWithMeta = {
+  describe("Metadata submission", () => {
+    it("should send metadata values when provided", async () => {
+      const callToolMock = jest.fn(async () => {});
+
+      renderToolsTab({ selectedTool: mockTools[0], callTool: callToolMock });
+
+      // Add a metadata key/value pair
+      const addPairButton = screen.getByRole("button", { name: /add pair/i });
+      await act(async () => {
+        fireEvent.click(addPairButton);
+      });
+
+      // Fill key and value
+      const keyInputs = screen.getAllByLabelText(/key/i);
+      const valueInputs = screen.getAllByLabelText(/value/i);
+      expect(keyInputs.length).toBeGreaterThan(0);
+      expect(valueInputs.length).toBeGreaterThan(0);
+
+      await act(async () => {
+        fireEvent.change(keyInputs[0], { target: { value: "requestId" } });
+        fireEvent.change(valueInputs[0], { target: { value: "abc123" } });
+      });
+
+      // Run tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      expect(callToolMock).toHaveBeenCalledTimes(1);
+      expect(callToolMock).toHaveBeenLastCalledWith(
+        mockTools[0].name,
+        expect.any(Object),
+        { requestId: "abc123" },
+        false,
+      );
+    });
+  });
+
+  describe("Reserved metadata keys", () => {
+    test.each`
+      description                             | value                             | message
+      ${"reserved metadata prefix"}           | ${"modelcontextprotocol.io/flip"} | ${RESERVED_NAMESPACE_MESSAGE}
+      ${"reserved root without slash"}        | ${"modelcontextprotocol.io"}      | ${RESERVED_NAMESPACE_MESSAGE}
+      ${"nested modelcontextprotocol domain"} | ${"api.modelcontextprotocol.org"} | ${RESERVED_NAMESPACE_MESSAGE}
+      ${"nested mcp domain"}                  | ${"tools.mcp.com/resource"}       | ${RESERVED_NAMESPACE_MESSAGE}
+      ${"invalid name segment"}               | ${"custom/bad-"}                  | ${META_NAME_RULES_MESSAGE}
+      ${"invalid prefix label"}               | ${"1invalid-prefix/value"}        | ${META_PREFIX_RULES_MESSAGE}
+    `(
+      "should block execution when $description is provided",
+      async ({ value, message }) => {
+        renderToolsTab({ selectedTool: mockTools[0] });
+
+        const addPairButton = screen.getByRole("button", { name: /add pair/i });
+        await act(async () => {
+          fireEvent.click(addPairButton);
+        });
+
+        const keyInput = screen.getByPlaceholderText("e.g. requestId");
+        await act(async () => {
+          fireEvent.change(keyInput, { target: { value } });
+        });
+
+        const runButton = screen.getByRole("button", { name: /run tool/i });
+        expect(runButton).toBeDisabled();
+        expect(screen.getByText(message)).toBeInTheDocument();
+      },
+    );
+  });
+
+  describe("ToolResults Metadata", () => {
+    it("should display metadata information when present in toolResult", () => {
+      const resultWithMetadata = {
         content: [],
         _meta: { info: "details", version: 2 },
       };
 
       renderToolsTab({
         selectedTool: mockTools[0],
-        toolResult: resultWithMeta,
+        toolResult: resultWithMetadata,
       });
 
-      // Only ToolResults meta should be present since selectedTool has no _meta
+      // Only ToolResults metadata should be present since selectedTool has no _meta
       expect(screen.getAllByText("Meta:")).toHaveLength(1);
       expect(screen.getByText(/info/i)).toBeInTheDocument();
       expect(screen.getByText(/version/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("Enum Parameters", () => {
+    const toolWithEnumParam: Tool = {
+      name: "enumTool",
+      description: "Tool with enum parameter",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          format: {
+            type: "string" as const,
+            enum: ["json", "xml", "csv", "yaml"],
+            description: "Output format",
+          },
+        },
+      },
+    };
+
+    beforeEach(() => {
+      // Mock scrollIntoView for Radix UI Select
+      Element.prototype.scrollIntoView = jest.fn();
+    });
+
+    it("should render enum parameter as dropdown", () => {
+      renderToolsTab({
+        tools: [toolWithEnumParam],
+        selectedTool: toolWithEnumParam,
+      });
+
+      // Should render a select button instead of textarea
+      const selectTrigger = screen.getByRole("combobox", { name: /format/i });
+      expect(selectTrigger).toBeInTheDocument();
+    });
+
+    it("should render non-enum string parameter as textarea", () => {
+      const toolWithStringParam: Tool = {
+        name: "stringTool",
+        description: "Tool with regular string parameter",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            text: {
+              type: "string" as const,
+              description: "Some text input",
+            },
+          },
+        },
+      };
+
+      renderToolsTab({
+        tools: [toolWithStringParam],
+        selectedTool: toolWithStringParam,
+      });
+
+      // Should render textarea, not select
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+    });
+  });
+
+  describe("JSON Validation Integration", () => {
+    const toolWithJsonParams: Tool = {
+      name: "jsonTool",
+      description: "Tool with JSON parameters",
+      inputSchema: {
+        type: "object" as const,
+        required: ["config", "data"], // Make them required so they render as form fields
+        properties: {
+          config: {
+            type: "object" as const,
+            // No properties defined - this will force JSON mode
+          },
+          data: {
+            type: "array" as const,
+            // No items defined - this will force JSON mode
+          },
+        },
+      },
+    };
+
+    it("should prevent tool execution when JSON validation fails", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithJsonParams],
+        selectedTool: toolWithJsonParams,
+        callTool: mockCallTool,
+      });
+
+      // Find JSON editor textareas (there should be at least 1 for JSON parameters)
+      const textareas = screen.getAllByRole("textbox");
+      expect(textareas.length).toBeGreaterThanOrEqual(1);
+
+      // Enter invalid JSON in the first textarea
+      const configTextarea = textareas[0];
+      fireEvent.change(configTextarea, {
+        target: { value: '{ "invalid": json }' },
+      });
+
+      // Try to run the tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Tool should not have been called due to validation failure
+      expect(mockCallTool).not.toHaveBeenCalled();
+    });
+
+    it("should allow tool execution when JSON validation passes", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithJsonParams],
+        selectedTool: toolWithJsonParams,
+        callTool: mockCallTool,
+      });
+
+      // Find JSON editor textareas (should have one for each required field: config and data)
+      const textareas = screen.getAllByRole("textbox");
+      expect(textareas.length).toBe(2);
+
+      // Enter valid JSON in each textarea
+      fireEvent.change(textareas[0], {
+        target: { value: '{ "setting": "value" }' },
+      });
+      fireEvent.change(textareas[1], {
+        target: { value: '["item1", "item2"]' },
+      });
+
+      // Wait for debounced updates
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      });
+
+      // Try to run the tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Tool should have been called successfully
+      expect(mockCallTool).toHaveBeenCalled();
+    });
+
+    it("should handle mixed valid and invalid JSON parameters", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithJsonParams],
+        selectedTool: toolWithJsonParams,
+        callTool: mockCallTool,
+      });
+
+      const textareas = screen.getAllByRole("textbox");
+
+      // Enter invalid JSON that contains both valid and invalid parts
+      fireEvent.change(textareas[0], {
+        target: {
+          value:
+            '{ "config": { "setting": "value" }, "data": ["unclosed array" }',
+        },
+      });
+
+      // Try to run the tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Tool should not have been called due to validation failure
+      expect(mockCallTool).not.toHaveBeenCalled();
+    });
+
+    it("should work with tools that have no JSON parameters", async () => {
+      const mockCallTool = jest.fn();
+      const simpleToolWithStringParam: Tool = {
+        name: "simpleTool",
+        description: "Tool with simple parameters",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            message: { type: "string" as const },
+            count: { type: "number" as const },
+          },
+        },
+      };
+
+      renderToolsTab({
+        tools: [simpleToolWithStringParam],
+        selectedTool: simpleToolWithStringParam,
+        callTool: mockCallTool,
+      });
+
+      // Fill in the simple parameters
+      const messageInput = screen.getByRole("textbox");
+      const countInput = screen.getByRole("spinbutton");
+
+      fireEvent.change(messageInput, { target: { value: "test message" } });
+      fireEvent.change(countInput, { target: { value: "5" } });
+
+      // Run the tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Tool should have been called successfully (no JSON validation needed)
+      expect(mockCallTool).toHaveBeenCalledWith(
+        simpleToolWithStringParam.name,
+        {
+          message: "test message",
+          count: 5,
+        },
+        undefined,
+        false,
+      );
+    });
+
+    it("should handle empty JSON parameters correctly", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithJsonParams],
+        selectedTool: toolWithJsonParams,
+        callTool: mockCallTool,
+      });
+
+      const textareas = screen.getAllByRole("textbox");
+      expect(textareas.length).toBe(2);
+
+      // Clear both textareas (empty JSON should be valid)
+      fireEvent.change(textareas[0], { target: { value: "{}" } });
+      fireEvent.change(textareas[1], { target: { value: "[]" } });
+
+      // Wait for debounced updates
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      });
+
+      // Try to run the tool
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Tool should have been called (empty JSON is considered valid)
+      expect(mockCallTool).toHaveBeenCalled();
     });
   });
 });

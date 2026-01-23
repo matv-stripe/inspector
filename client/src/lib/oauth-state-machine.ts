@@ -1,7 +1,7 @@
 import { OAuthStep, AuthDebuggerState } from "./auth-types";
-import { DebugInspectorOAuthClientProvider } from "./auth";
+import { DebugInspectorOAuthClientProvider, discoverScopes } from "./auth";
 import {
-  discoverOAuthMetadata,
+  discoverAuthorizationServerMetadata,
   registerClient,
   startAuthorization,
   exchangeAuthorization,
@@ -12,6 +12,7 @@ import {
   OAuthMetadataSchema,
   OAuthProtectedResourceMetadata,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { generateOAuthState } from "@/utils/oauthUtils";
 
 export interface StateMachineContext {
   state: AuthDebuggerState;
@@ -56,7 +57,7 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
         resourceMetadata ?? undefined,
       );
 
-      const metadata = await discoverOAuthMetadata(authServerUrl);
+      const metadata = await discoverAuthorizationServerMetadata(authServerUrl);
       if (!metadata) {
         throw new Error("Failed to discover OAuth metadata");
       }
@@ -79,21 +80,28 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
       const metadata = context.state.oauthMetadata!;
       const clientMetadata = context.provider.clientMetadata;
 
-      // Prefer scopes from resource metadata if available
-      const scopesSupported =
-        context.state.resourceMetadata?.scopes_supported ||
-        metadata.scopes_supported;
-      // Add all supported scopes to client registration
-      if (scopesSupported) {
-        clientMetadata.scope = scopesSupported.join(" ");
+      // Priority: user-provided scope > discovered scopes
+      if (!context.provider.scope || context.provider.scope.trim() === "") {
+        // Prefer scopes from resource metadata if available
+        const scopesSupported =
+          context.state.resourceMetadata?.scopes_supported ||
+          metadata.scopes_supported;
+        // Add all supported scopes to client registration
+        if (scopesSupported) {
+          clientMetadata.scope = scopesSupported.join(" ");
+        }
       }
 
-      const fullInformation = await registerClient(context.serverUrl, {
-        metadata,
-        clientMetadata,
-      });
+      // Try Static client first, with DCR as fallback
+      let fullInformation = await context.provider.clientInformation();
+      if (!fullInformation) {
+        fullInformation = await registerClient(context.serverUrl, {
+          metadata,
+          clientMetadata,
+        });
+        context.provider.saveClientInformation(fullInformation);
+      }
 
-      context.provider.saveClientInformation(fullInformation);
       context.updateState({
         oauthClientInfo: fullInformation,
         oauthStep: "authorization_redirect",
@@ -108,17 +116,14 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
       const metadata = context.state.oauthMetadata!;
       const clientInformation = context.state.oauthClientInfo!;
 
-      let scope: string | undefined = undefined;
-      if (metadata.scopes_supported) {
-        scope = metadata.scopes_supported.join(" ");
+      // Priority: user-provided scope > discovered scopes
+      let scope = context.provider.scope;
+      if (!scope || scope.trim() === "") {
+        scope = await discoverScopes(
+          context.serverUrl,
+          context.state.resourceMetadata ?? undefined,
+        );
       }
-
-      // Generate a random state
-      const array = new Uint8Array(32);
-      crypto.getRandomValues(array);
-      const state = Array.from(array, (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join("");
 
       const { authorizationUrl, codeVerifier } = await startAuthorization(
         context.serverUrl,
@@ -127,14 +132,14 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
           clientInformation,
           redirectUrl: context.provider.redirectUrl,
           scope,
-          state: state,
+          state: generateOAuthState(),
           resource: context.state.resource ?? undefined,
         },
       );
 
       context.provider.saveCodeVerifier(codeVerifier);
       context.updateState({
-        authorizationUrl: authorizationUrl.toString(),
+        authorizationUrl: authorizationUrl,
         oauthStep: "authorization_code",
       });
     },
@@ -179,7 +184,11 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
         authorizationCode: context.state.authorizationCode,
         codeVerifier,
         redirectUri: context.provider.redirectUrl,
-        resource: context.state.resource ?? undefined,
+        resource: context.state.resource
+          ? context.state.resource instanceof URL
+            ? context.state.resource
+            : new URL(context.state.resource)
+          : undefined,
       });
 
       context.provider.saveTokens(tokens);

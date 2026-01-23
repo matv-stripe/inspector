@@ -1,4 +1,12 @@
 import { InspectorConfig } from "./configurationTypes";
+import packageJson from "../../package.json";
+
+// Client identity for MCP connections
+export const CLIENT_IDENTITY = (() => {
+  const [, name = packageJson.name] = packageJson.name.split("/");
+  const version = packageJson.version;
+  return { name, version };
+})();
 
 // OAuth-related session storage keys
 export const SESSION_KEYS = {
@@ -9,6 +17,7 @@ export const SESSION_KEYS = {
   PREREGISTERED_CLIENT_INFORMATION: "mcp_preregistered_client_information",
   SERVER_METADATA: "mcp_server_metadata",
   AUTH_DEBUGGER_STATE: "mcp_auth_debugger_state",
+  SCOPE: "mcp_scope",
 } as const;
 
 // Generate server-specific session storage keys
@@ -35,8 +44,9 @@ export const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 export const DEFAULT_INSPECTOR_CONFIG: InspectorConfig = {
   MCP_SERVER_REQUEST_TIMEOUT: {
     label: "Request Timeout",
-    description: "Timeout for requests to the MCP server (ms)",
-    value: 10000,
+    description:
+      "Client-side timeout (ms) - Inspector will cancel requests after this time",
+    value: 300000, // 5 minutes - increased to support elicitation and other long-running tools
     is_session_item: false,
   },
   MCP_REQUEST_TIMEOUT_RESET_ON_PROGRESS: {
@@ -71,6 +81,13 @@ export const DEFAULT_INSPECTOR_CONFIG: InspectorConfig = {
     description:
       "Set this if you want to run MCP server through a unix socket proxy. Useful when testing behind a corporate proxy. Example: ~/home/.proxy",
     value: "",
+    is_session_item: false,
+  },
+  MCP_TASK_TTL: {
+    label: "Task TTL",
+    description:
+      "Default Time-to-Live (TTL) in milliseconds for newly created tasks",
+    value: 60000,
     is_session_item: false,
   },
 } as const;

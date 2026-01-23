@@ -42,12 +42,14 @@ const disconnectedConnectionState = {
   serverCapabilities: null,
   mcpClient: null,
   requestHistory: [],
+  clearRequestHistory: jest.fn(),
   makeRequest: jest.fn(),
   sendNotification: jest.fn(),
   handleCompletion: jest.fn(),
   completionsSupported: false,
   connect: jest.fn(),
   disconnect: jest.fn(),
+  serverImplementation: null,
 };
 
 // Connected state for tests that need an active connection
