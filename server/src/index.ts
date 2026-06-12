@@ -877,43 +877,50 @@ const openai = new OpenAI({
   apiKey: process.env.LLM_API_KEY || "use_case=development&team=developer-ai",
 });
 
-app.post("/chat", express.json(), async (req, res) => {
-  try {
-    const { messages } = req.body;
-    const tools: Tool[] = req.body.tools;
-    if (!messages) {
-      return res.status(400).json({ error: "Messages are required" });
+app.post(
+  "/chat",
+  express.json(),
+  originValidationMiddleware,
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const { messages } = req.body;
+      const tools: Tool[] = req.body.tools;
+      if (!messages) {
+        return res.status(400).json({ error: "Messages are required" });
+      }
+
+      const openAITools: ChatCompletionTool[] = tools.flatMap((tool) => {
+        const name = tool.name;
+        const description = tool.description;
+        const parameters = tool.inputSchema;
+
+        return {
+          type: "function",
+          function: {
+            name,
+            description,
+            parameters,
+          },
+        };
+      });
+
+      const completion = await openai.chat.completions.create({
+        model: process.env.LLM_MODEL || "claude-sonnet-4",
+        messages: messages,
+        tools: openAITools,
+      });
+
+      res.json({
+        message: completion.choices[0].message,
+      });
+    } catch (error) {
+      console.error("Error in /chat route:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    const openAITools: ChatCompletionTool[] = tools.flatMap((tool) => {
-      const name = tool.name;
-      const description = tool.description;
-      const parameters = tool.inputSchema || tool.parameters;
-
-      return {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters,
-        },
-      };
-    });
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.LLM_MODEL || "claude-sonnet-4",
-      messages: messages,
-      tools: openAITools,
-    });
-
-    res.json({
-      message: completion.choices[0].message,
-    });
-  } catch (error) {
-    console.error("Error in /chat route:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+  },
+);
 
 app.get("/health", (req, res) => {
   res.json({

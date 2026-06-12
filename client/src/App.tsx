@@ -373,8 +373,6 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
-  const [currentTab, setCurrentTab] = useState<string>("resources");
-
   const {
     connectionStatus,
     serverCapabilities,
@@ -1763,7 +1761,7 @@ const App = () => {
         <div
           className={cn(
             "relative border-t border-border",
-            currentTab === "chat" && "hidden",
+            activeTab === "chat" && "hidden",
           )}
           style={{
             height: `${historyPaneHeight}px`,

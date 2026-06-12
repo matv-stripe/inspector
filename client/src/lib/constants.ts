@@ -97,5 +97,6 @@ export const DEFAULT_INSPECTOR_CONFIG: InspectorConfig = {
     description:
       "Set this if you want to run MCP server through a unix socket proxy. Useful when testing behind a corporate proxy. Example: ~/home/.proxy",
     value: "",
+    is_session_item: false,
   },
 } as const;
