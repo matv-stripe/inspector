@@ -4,10 +4,14 @@ import cors from "cors";
 import { parseArgs } from "node:util";
 import { parse as shellParseArgs } from "shell-quote";
 import nodeFetch, { Headers as NodeHeaders } from "node-fetch";
+import * as dotenv from "dotenv";
 
 // Type-compatible wrappers for node-fetch to work with browser-style types
 const fetch = nodeFetch;
 const Headers = NodeHeaders;
+
+// Load environment variables from .env file
+dotenv.config();
 
 import {
   SSEClientTransport,
@@ -32,8 +36,11 @@ import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync } from "fs";
+import OpenAI from "openai";
 
 import { disableSocketProxy, enableSocketProxy } from "./socketProxy.js";
+import { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ChatCompletionTool } from "openai/resources.mjs";
 
 const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 
@@ -864,6 +871,61 @@ app.post(
     }
   },
 );
+
+const openai = new OpenAI({
+  baseURL: `${process.env.HTTP_PROXY}/v1/`,
+  apiKey: process.env.OPEN_AI_KEY,
+  defaultHeaders: {
+    Host: process.env.OPEN_AI_HOST,
+  },
+});
+
+app.post("/chat", express.json(), async (req, res) => {
+  try {
+    const { message } = req.body;
+    const tools: Tool[] = req.body.tools;
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    const openAITools: ChatCompletionTool[] = tools.flatMap((tool) => {
+      if (!tool.name || !tool.description || !tool.inputSchema) {
+        return [];
+      }
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      };
+    });
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: message }],
+      tools: openAITools,
+    });
+
+    const responseMessage = completion.choices[0].message;
+
+    const toolsCalled = responseMessage.tool_calls?.map((tc) => {
+      return {
+        name: tc.function.name,
+        args: JSON.parse(tc.function.arguments),
+      };
+    });
+
+    res.json({
+      response: responseMessage.content,
+      toolCalls: toolsCalled,
+    });
+  } catch (error) {
+    console.error("Error in /chat route:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 app.get("/health", (req, res) => {
   res.json({

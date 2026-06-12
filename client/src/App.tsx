@@ -100,6 +100,7 @@ import {
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
 import MetadataTab from "./components/MetadataTab";
+import ChatTab from "./components/ChatTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -1478,6 +1479,10 @@ const App = () => {
                   <Settings className="w-4 h-4 mr-2" />
                   Metadata
                 </TabsTrigger>
+                <TabsTrigger value="chat">
+                  <MessageSquare className="w-4 h-4 mr-2" />
+                  Chat
+                </TabsTrigger>
               </TabsList>
 
               <div className="w-full">
@@ -1713,6 +1718,11 @@ const App = () => {
                     <MetadataTab
                       metadata={metadata}
                       onMetadataChange={handleMetadataChange}
+                    />
+                    <ChatTab
+                      chatURL={getMCPProxyAddress(config) + "/chat"}
+                      tools={tools}
+                      callTool={callTool}
                     />
                   </>
                 )}
