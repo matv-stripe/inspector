@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && shx cp -R static build",
+    "build": "tsc && (shx cp -R static build 2>/dev/null || cp -r static build)",
     "start": "node build/index.js",
     "dev": "tsx watch --clear-screen=false src/index.ts",
     "dev:windows": "tsx watch --clear-screen=false src/index.ts < NUL"
